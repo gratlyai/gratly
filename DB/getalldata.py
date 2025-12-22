@@ -1,7 +1,7 @@
-mport requests
+import requests
 import json
 import configparser
-import mysql.connector
+import pymysql
 from datetime import datetime, date, time, timedelta,timezone
 import pytz
 from zoneinfo import ZoneInfo
@@ -75,8 +75,11 @@ def main():
         'host': config['DATABASE']['host'],
         'user': config['DATABASE']['user'],
         'password': config['DATABASE']['password'],
-        'database': config['DATABASE']['database']
+        'database': config['DATABASE']['database'],
+        'connect_timeout': 10
     }
+
+    request_timeout = (10, 30)
     
     # Get all the URLs from the setting.ini 
     
@@ -86,11 +89,15 @@ def main():
     
     # Initiate the MySQL connection
     
-    conn = mysql.connector.connect(**db_config)
-    cursor = conn.cursor(dictionary=True)
+    print("Connecting to database...")
+    conn = pymysql.connect(**db_config, cursorclass=pymysql.cursors.DictCursor)
+    print("Database connected.")
+    cursor = conn.cursor()
     
+    print("Fetching onboarding records...")
     cursor.execute("SELECT RESTAURANTGUID,SECRETKEY,CLIENTSECRET,USERACCESSTYPE from GRATLYDB.SRC_ONBOARDING")
     get_results = cursor.fetchall()
+    print(f"Found {len(get_results)} onboarding records.")
     
     for row in get_results:
         payload = {
@@ -101,7 +108,8 @@ def main():
         headers_init = row['RESTAURANTGUID']
         headers = {"Content-Type": "application/json"}
         authurl = 'https://ws-api.toasttab.com/authentication/v1/authentication/login'
-        response = requests.post(authurl, json=payload, headers=headers)
+        print(f"Authenticating restaurant {headers_init}...")
+        response = requests.post(authurl, json=payload, headers=headers, timeout=request_timeout)
         
         data = response.json()
 
@@ -121,7 +129,8 @@ def main():
             if url == 'https://ws-api.toasttab.com/restaurants/v1/restaurants/':
                 url = f"{url}{headers_init}"
                 # print(f"URL IS {url}")
-                response = requests.get(url, headers=headers)
+                print(f"Fetching restaurant details for {headers_init}...")
+                response = requests.get(url, headers=headers, timeout=request_timeout)
                 data = response.json()
                 
                 # pretty_json_output = json.dumps(data, indent=4)
@@ -140,7 +149,8 @@ def main():
                     conn.rollback()
             
             if url == 'https://ws-api.toasttab.com/labor/v1/jobs':
-                response = requests.get(url, headers=headers)
+                print(f"Fetching jobs for {headers_init}...")
+                response = requests.get(url, headers=headers, timeout=request_timeout)
                 data = response.json()    
                 
                 # SQL query to insert data
@@ -154,7 +164,8 @@ def main():
                     conn.rollback()   
                 
             if url == 'https://ws-api.toasttab.com/labor/v1/employees':
-                response = requests.get(url, headers=headers)
+                print(f"Fetching employees for {headers_init}...")
+                response = requests.get(url, headers=headers, timeout=request_timeout)
                 data = response.json()    
                 
                 # SQL query to insert data
@@ -198,7 +209,8 @@ def main():
                     "includeArchived": "true",
                     "includeMissedBreaks": "true"
                     }
-                response = requests.get(url, headers=headers, params=query)
+                print(f"Fetching time entries for {headers_init}...")
+                response = requests.get(url, headers=headers, params=query, timeout=request_timeout)
                 data = response.json()   
                  
                 timeentries_sql_data = []
@@ -222,7 +234,8 @@ def main():
                     
             if url == 'https://ws-api.toasttab.com/config/v2/tables':
                         
-                response = requests.get(url, headers=headers)
+                print(f"Fetching tables for {headers_init}...")
+                response = requests.get(url, headers=headers, timeout=request_timeout)
                 data = response.json()    
                 
                 # SQL query to insert data
@@ -240,7 +253,8 @@ def main():
                 query = {
                         "businessDate": business_date
                         }
-                response = requests.get(url, headers=headers, params=query)
+                print(f"Fetching orders for {headers_init}...")
+                response = requests.get(url, headers=headers, params=query, timeout=request_timeout)
                 data = response.json()    
                 
                 all_orders_sql_data = []
@@ -296,9 +310,8 @@ def main():
                     conn.rollback()   
                               
                 
-        if conn.is_connected():
-            cursor.close()
-            conn.close()
+        cursor.close()
+        conn.close()
 
 if __name__ == "__main__":
     main()
