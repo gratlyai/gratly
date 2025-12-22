@@ -195,12 +195,13 @@ const BusinessLayout: React.FC = () => {
           </button>
           {isUserMenuOpen && (
             <div className="absolute right-0 mt-2 w-48 rounded-lg border border-gray-200 bg-white shadow-lg">
-              <button
-                type="button"
-                className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
+              <Link
+                to={`${businessBase}/profile`}
+                className="block w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
+                onClick={() => setIsUserMenuOpen(false)}
               >
                 Profile
-              </button>
+              </Link>
               <button
                 type="button"
                 className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"

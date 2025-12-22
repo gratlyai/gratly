@@ -7,6 +7,7 @@ import Reports from "./pages/Reports";
 import Settings from "./pages/Settings";
 import Reconciliation from "./pages/Reconciliation";
 import GratlyShiftPayout from "./GratlyShiftPayout";
+import GratlyProfile from "./GratlyProfile";
 import { PrivateRoute } from "./auth/PrivateRoute";
 import BusinessLayout from "./layouts/BusinessLayout";
 
@@ -30,6 +31,7 @@ export default function App() {
         <Route path="employees" element={<Employees />} />
         <Route path="reports" element={<Reports />} />
         <Route path="settings" element={<Settings />} />
+        <Route path="profile" element={<GratlyProfile />} />
       </Route>
     </Routes>
   );
