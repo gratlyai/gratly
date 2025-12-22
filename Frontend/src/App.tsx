@@ -1,0 +1,36 @@
+import { Routes, Route } from "react-router-dom";
+import GratlyLogin from "./GratlyLogin";
+import GratlySignUp from "./GratlySignUp";
+import GratlyHome from "./GratlyHome";
+import Employees from "./pages/Employees";
+import Reports from "./pages/Reports";
+import Settings from "./pages/Settings";
+import Reconciliation from "./pages/Reconciliation";
+import GratlyShiftPayout from "./GratlyShiftPayout";
+import { PrivateRoute } from "./auth/PrivateRoute";
+import BusinessLayout from "./layouts/BusinessLayout";
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<GratlyLogin />} />
+      <Route path="/login" element={<GratlyLogin />} />
+      <Route path="/signup" element={<GratlySignUp />} />
+      <Route
+        path="/business/:restaurantKey"
+        element={
+          <PrivateRoute>
+            <BusinessLayout />
+          </PrivateRoute>
+        }
+      >
+        <Route path="home" element={<GratlyHome />} />
+        <Route path="approvals" element={<Reconciliation />} />
+        <Route path="shift-payout" element={<GratlyShiftPayout />} />
+        <Route path="employees" element={<Employees />} />
+        <Route path="reports" element={<Reports />} />
+        <Route path="settings" element={<Settings />} />
+      </Route>
+    </Routes>
+  );
+}
