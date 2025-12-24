@@ -1,14 +1,166 @@
-import { StatCard } from "../components/StatCard";
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import type { Employee } from "../api/employees";
+import { fetchEmployees } from "../api/employees";
 
-export default function Dashboard() {
+const formatValue = (value: string | null | undefined) => {
+  if (!value) {
+    return "N/A";
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : "N/A";
+};
+
+const formatPhoneNumber = (value: string | null | undefined) => {
+  if (!value) {
+    return "N/A";
+  }
+  const digits = value.replace(/\D/g, "");
+  if (digits.length !== 10) {
+    return formatValue(value);
+  }
+  return `(${digits.slice(0, 3)})${digits.slice(3, 6)}-${digits.slice(6)}`;
+};
+
+export default function Employees() {
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [showAllEmployees, setShowAllEmployees] = useState(false);
+  const [pendingInvites, setPendingInvites] = useState<Record<string, boolean>>({});
+  const isInactive = (status: string) => status.trim().toLowerCase() === "inactive";
+  const activeEmployees = employees.filter((employee) => !isInactive(employee.is_active));
+  const inactiveEmployees = employees.filter((employee) => isInactive(employee.is_active));
+  const visibleEmployees = showAllEmployees ? employees : activeEmployees;
+
+  useEffect(() => {
+    let isMounted = true;
+    fetchEmployees()
+      .then((data) => {
+        if (isMounted) {
+          setEmployees(data);
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setIsLoading(false);
+        }
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const getEmployeeKey = (employee: Employee, index: number) =>
+    employee.employeeGuid ?? employee.email ?? `employee-${index}`;
+
+  const markInvitePending = (key: string) => {
+    setPendingInvites((current) => ({ ...current, [key]: true }));
+  };
+
   return (
-    <main className="p-6 bg-gray-100">
-      <h1 className="text-2xl mb-6">Dashboard</h1>
-      <div className="grid grid-cols-4 gap-4">
-        <StatCard title="Today's Tips" value="$1,200" />
-        <StatCard title="This Week" value="$6,400" />
-        <StatCard title="Employees" value="18" />
-        <StatCard title="Pending Payouts" value="$840" />
+    <main className="px-6 py-6">
+      <div className="mb-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold text-gray-900">Team</h1>
+            <p className="text-sm text-gray-500">Roster and contact details for your employees.</p>
+          </div>
+          <label className="ml-auto flex items-center gap-2 text-sm font-medium text-gray-700">
+            <input
+              type="checkbox"
+              checked={showAllEmployees}
+              onChange={(event) => setShowAllEmployees(event.target.checked)}
+              className="h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-900"
+            />
+            Show all employees
+          </label>
+        </div>
+      </div>
+      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
+              <tr>
+                <th className="px-6 py-3 font-semibold">First name</th>
+                <th className="px-6 py-3 font-semibold">Last name</th>
+                <th className="px-6 py-3 font-semibold">Phone</th>
+                <th className="px-6 py-3 font-semibold">Email</th>
+                <th className="px-6 py-3 font-semibold">POS Status</th>
+                <th className="px-6 py-3 font-semibold">Gratly Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {isLoading ? (
+                <tr>
+                  <td className="px-6 py-4 text-gray-500" colSpan={6}>
+                    Loading team members...
+                  </td>
+                </tr>
+              ) : visibleEmployees.length === 0 ? (
+                <tr>
+                  <td className="px-6 py-4 text-gray-500" colSpan={6}>
+                    {showAllEmployees ? "No employees found." : "No active employees found."}
+                  </td>
+                </tr>
+              ) : (
+                visibleEmployees.map((employee, index) => {
+                  const employeeKey = getEmployeeKey(employee, index);
+                  const inactive = isInactive(employee.is_active);
+                  const statusClass = inactive
+                    ? "bg-rose-100 text-rose-700"
+                    : "bg-emerald-100 text-emerald-700";
+                  const hasGratlyAccount = Boolean(employee.userId);
+                  const isAwaiting = Boolean(pendingInvites[employeeKey]);
+                  const gratlyStatus = hasGratlyAccount ? "Active" : isAwaiting ? "Awaiting" : "Inactive";
+                  const gratlyStatusClass = hasGratlyAccount
+                    ? "bg-emerald-100 text-emerald-700"
+                    : isAwaiting
+                      ? "bg-amber-100 text-amber-700"
+                      : "bg-rose-100 text-rose-700";
+                  const canInvite = Boolean(employee.email);
+                  return (
+                    <tr key={`${employeeKey}-${index}`} className="text-gray-700">
+                      <td className="px-6 py-4">
+                        {employee.employeeGuid ? (
+                          <Link className="font-medium text-gray-900 hover:underline" to={`${employee.employeeGuid}`}>
+                            {formatValue(employee.firstName)}
+                          </Link>
+                        ) : (
+                          formatValue(employee.firstName)
+                        )}
+                      </td>
+                      <td className="px-6 py-4">{formatValue(employee.lastName)}</td>
+                      <td className="px-6 py-4">{formatPhoneNumber(employee.phoneNumber)}</td>
+                      <td className="px-6 py-4">{formatValue(employee.email)}</td>
+                      <td className="px-6 py-4">
+                        <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${statusClass}`}>
+                          {employee.is_active}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${gratlyStatusClass}`}>
+                            {gratlyStatus}
+                          </span>
+                          {!hasGratlyAccount && !isAwaiting ? (
+                            <button
+                              type="button"
+                              className="rounded-full border border-gray-300 px-3 py-1 text-xs font-semibold text-gray-700 transition hover:border-gray-400 hover:text-gray-900 disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-400"
+                              onClick={() => markInvitePending(employeeKey)}
+                              disabled={!canInvite}
+                            >
+                              Send Invite
+                            </button>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </main>
   );

@@ -431,7 +431,7 @@ const GratlyFormsSystem: React.FC = () => {
                         type="button"
                         onClick={confirmDeleteSelected}
                         disabled={isDeleting}
-                        className="px-4 py-2 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-500 disabled:opacity-60 disabled:cursor-not-allowed"
+                        className="px-4 py-2 rounded-lg bg-red-600 text-black font-semibold hover:bg-red-500 disabled:opacity-60 disabled:cursor-not-allowed"
                       >
                         {isDeleting ? 'Deleting...' : 'Yes, delete'}
                       </button>
@@ -452,7 +452,7 @@ const GratlyFormsSystem: React.FC = () => {
                         resetFormFields();
                         setActiveView('create');
                       }}
-                      className="bg-black text-white px-6 py-3 rounded-lg font-semibold hover:bg-gray-900 transition-all shadow-md"
+                      className="bg-[#cab99a] text-black px-6 py-3 rounded-lg font-semibold hover:bg-[#bfa986] transition-all shadow-md"
                     >
                       Create Tip Pool
                     </button>
@@ -671,7 +671,7 @@ const GratlyFormsSystem: React.FC = () => {
                         onClick={() => toggleFund(index)}
                         className={`px-6 py-3 rounded-lg font-semibold transition-all ${
                           fund.selected
-                            ? 'bg-black text-white'
+                            ? 'bg-[#cab99a] text-black'
                             : 'bg-white text-gray-900 border-2 border-gray-300 hover:bg-gray-50'
                         }`}
                       >
@@ -740,7 +740,7 @@ const GratlyFormsSystem: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => addPosition(newPayIntoPosition, setPositionsPayInto, setNewPayIntoPosition)}
-                          className="px-4 py-2 bg-gray-900 text-white rounded-lg font-semibold hover:bg-gray-800 transition-all"
+                          className="px-4 py-2 bg-[#cab99a] text-black rounded-lg font-semibold hover:bg-[#bfa986] transition-all"
                         >
                           Add
                         </button>
@@ -815,7 +815,7 @@ const GratlyFormsSystem: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => addPosition(newPaidFromTipsPosition, setPositionsPaidFromTips, setNewPaidFromTipsPosition)}
-                          className="px-4 py-2 bg-gray-900 text-white rounded-lg font-semibold hover:bg-gray-800 transition-all"
+                          className="px-4 py-2 bg-[#cab99a] text-black rounded-lg font-semibold hover:bg-[#bfa986] transition-all"
                         >
                           Add
                         </button>
@@ -897,7 +897,7 @@ const GratlyFormsSystem: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => addPosition(newFlatRatePosition, setFlatRatePositions, setNewFlatRatePosition)}
-                          className="px-4 py-2 bg-gray-900 text-white rounded-lg font-semibold hover:bg-gray-800 transition-all"
+                          className="px-4 py-2 bg-[#cab99a] text-black rounded-lg font-semibold hover:bg-[#bfa986] transition-all"
                         >
                           Add
                         </button>
@@ -995,7 +995,7 @@ const GratlyFormsSystem: React.FC = () => {
                     <button
                       onClick={handleCreateForm}
                       disabled={isSubmitting}
-                      className="bg-black text-white px-8 py-3 rounded-lg font-semibold hover:bg-gray-900 transition-all shadow-lg disabled:opacity-60 disabled:cursor-not-allowed"
+                    className="bg-[#cab99a] text-black px-8 py-3 rounded-lg font-semibold hover:bg-[#bfa986] transition-all shadow-lg disabled:opacity-60 disabled:cursor-not-allowed"
                     >
                       {isSubmitting ? 'Creating...' : 'Create Form'}
                     </button>

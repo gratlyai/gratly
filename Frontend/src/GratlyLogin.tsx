@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from "react-router-dom";
-import gratlyLogo from './assets/gratlylogo.png';
+import gratlyLogo from './assets/gratlylogodash.png';
+import { getStoredPermissions, isOwner } from "./auth/permissions";
 
 
 const GratlyLogin: React.FC = () => {
@@ -47,45 +48,67 @@ const navigate = useNavigate();
 
 const handleLogin = async () => {
   setIsLoading(true);
+  try {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 10000);
+    const res = await fetch("http://127.0.0.1:8000/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ email, password }),
+      signal: controller.signal,
+    });
+    window.clearTimeout(timeoutId);
 
-  const res = await fetch("http://127.0.0.1:8000/login", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ email, password })
-  });
+    const data = await res.json();
 
-  const data = await res.json();
-  setIsLoading(false);
-
-  console.log(data);
-  
-  if (data.success) {
-    if (data.user_id) {
-      localStorage.setItem("userId", String(data.user_id));
+    if (!res.ok) {
+      throw new Error(data?.detail || "Login request failed.");
     }
-    if (data.first_name || data.last_name) {
-      const fullName = `${data.first_name || ''} ${data.last_name || ''}`.trim();
+
+    console.log(data);
+
+    if (data.success) {
+      if (data.user_id) {
+        localStorage.setItem("userId", String(data.user_id));
+      }
+      const fullName = `${data.first_name || ""} ${data.last_name || ""}`.trim();
       if (fullName) {
         localStorage.setItem("userName", fullName);
       }
-    }
-    if (data.restaurant_key) {
-      localStorage.setItem("restaurantKey", String(data.restaurant_key));
-      if (data.restaurant_name) {
-        localStorage.setItem("restaurantName", String(data.restaurant_name));
-      } else {
-        localStorage.removeItem("restaurantName");
+      if (data.restaurant_key) {
+        localStorage.setItem("restaurantKey", String(data.restaurant_key));
+        if (data.restaurant_name) {
+          localStorage.setItem("restaurantName", String(data.restaurant_name));
+        } else {
+          localStorage.removeItem("restaurantName");
+        }
       }
-      navigate(`/business/${data.restaurant_key}/home`);
+      const employeeId = data.user_id ? String(data.user_id) : "";
+      const permissions = getStoredPermissions(employeeId, fullName);
+      const isAdminUser = permissions.adminAccess || isOwner(fullName);
+      if (data.restaurant_key && isAdminUser) {
+        navigate(`/business/${data.restaurant_key}/home`);
+      } else if (employeeId) {
+        navigate(`/employees/${employeeId}/home`);
+      } else if (data.restaurant_key) {
+        navigate(`/business/${data.restaurant_key}/home`);
+      } else {
+        navigate("/login");
+      }
     } else {
-      localStorage.removeItem("restaurantKey");
-      localStorage.removeItem("restaurantName");
-      navigate("/dashboard");
+      alert("Invalid login");
     }
-  } else {
-    alert("Invalid login");
+  } catch (error) {
+    console.error("Login failed:", error);
+    const message =
+      error instanceof DOMException && error.name === "AbortError"
+        ? "Login timed out. Make sure the backend server is running."
+        : "Login failed. Check your credentials and server connection.";
+    alert(message);
+  } finally {
+    setIsLoading(false);
   }
 };
 
@@ -108,10 +131,10 @@ const handleLogin = async () => {
               src={logoData}
               alt="Gratly Logo" 
               className="mx-auto"
-              style={{ height: '8rem' }}
+              style={{ width: '254px', height: '130px' }}
             />
           ) : (
-            <div style={{ height: '8rem' }} className="flex items-center justify-center">
+            <div style={{ width: '254px', height: '130px' }} className="mx-auto flex items-center justify-center">
               <div className="GratlyLogo">
                 <img src={gratlyLogo} alt="Gratly Logo" className="gratlylogomain"></img>
               </div>
@@ -188,7 +211,7 @@ const handleLogin = async () => {
             <button
               onClick={handleLogin}
               disabled={isLoading}
-              className="w-full bg-gray-900 text-white py-3 rounded-lg font-semibold hover:bg-gray-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl"
+              className="w-full bg-[#cab99a] text-black py-3 rounded-lg font-semibold hover:bg-[#bfa986] transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl"
             >
               {isLoading ? 'Signing In...' : 'Sign In'}
             </button>

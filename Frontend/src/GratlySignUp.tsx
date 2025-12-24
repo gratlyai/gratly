@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from "react-router-dom";
-import gratlyLogo from './assets/gratlylogo.png';
+import gratlyLogo from './assets/gratlylogodash.png';
 
 
 const GratlySignUp: React.FC = () => {
@@ -208,10 +208,10 @@ const handleSignUp = async () => {
               src={logoData}
               alt="Gratly Logo" 
               className="mx-auto"
-              style={{ height: '8rem' }}
+              style={{ width: '254px', height: '130px' }}
             />
           ) : (
-            <div style={{ height: '8rem' }} className="flex items-center justify-center">
+            <div style={{ width: '254px', height: '130px' }} className="mx-auto flex items-center justify-center">
               <div className="gratlylogo">
                  <img src={gratlyLogo} alt="Gratly Logo" className="gratlylogomain"></img>
               </div>
@@ -370,7 +370,7 @@ const handleSignUp = async () => {
             <button
               onClick={handleSignUp}
               disabled={isLoading}
-              className="w-full bg-gray-900 text-white py-3 rounded-lg font-semibold hover:bg-gray-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl mt-2"
+              className="w-full bg-[#cab99a] text-black py-3 rounded-lg font-semibold hover:bg-[#bfa986] transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl mt-2"
             >
               {isLoading ? 'Creating Account...' : 'Create Account'}
             </button>

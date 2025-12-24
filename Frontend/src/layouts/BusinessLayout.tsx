@@ -6,6 +6,7 @@ import shiftPayoutLogo from "../assets/shiftpayoutlogo.png";
 import reportsLogo from "../assets/reportslogo.png";
 import teamLogo from "../assets/teamlogo.png";
 import settingsLogo from "../assets/settingslogo.png";
+import gratlyLogo from "../assets/gratlylogodash.png";
 
 const BusinessLayout: React.FC = () => {
   const [logoData, setLogoData] = useState<string>("");
@@ -103,8 +104,8 @@ const BusinessLayout: React.FC = () => {
       ),
     },
     {
-      label: "Employees",
-      to: `${businessBase}/employees`,
+      label: "Team",
+      to: `${businessBase}/team`,
       icon: (
         <span
           aria-hidden="true"
@@ -172,9 +173,9 @@ const BusinessLayout: React.FC = () => {
       {/* Top Bar */}
       <div className="bg-white border-b border-gray-200 px-6 flex items-center justify-between shadow-sm fixed top-0 left-0 right-0 z-40 h-16">
         {logoData ? (
-          <img src={logoData} alt="Gratly Logo" className="h-10" />
+          <img src={logoData} alt="Gratly Logo" className="h-12" />
         ) : (
-          <div className="text-2xl font-bold text-gray-900">GRATLY</div>
+          <img src={gratlyLogo} alt="Gratly Logo" className="h-12" />
         )}
         {restaurantName ? (
           <div className="absolute left-1/2 -translate-x-1/2 text-center text-lg font-semibold text-gray-700 max-w-[40vw] truncate">
@@ -187,7 +188,7 @@ const BusinessLayout: React.FC = () => {
             onClick={() => setIsUserMenuOpen((prev) => !prev)}
             className="flex items-center gap-3 rounded-full border border-gray-200 bg-white px-3 py-2 shadow-sm hover:bg-gray-50"
           >
-            <span className="flex h-9 w-9 items-center justify-center rounded-full bg-gray-900 text-sm font-semibold text-white">
+            <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#cab99a] text-sm font-semibold text-black">
               {userInitials}
             </span>
             <span className="text-sm font-semibold text-gray-900">{storedUserName}</span>

@@ -45,7 +45,7 @@ export default function Login() {
         />
         <button
           onClick={login}
-          className="bg-black text-white w-full p-2 rounded"
+          className="bg-[#cab99a] text-black w-full p-2 rounded hover:bg-[#bfa986]"
         >
           Login
         </button>

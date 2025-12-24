@@ -1,10 +1,16 @@
+#!/usr/bin/env python3
 import requests
 import json
 import configparser
-import pymysql
+import mysql.connector
+import os
 from datetime import datetime, date, time, timedelta,timezone
 import pytz
 from zoneinfo import ZoneInfo
+
+def log(message):
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    print(f"[{timestamp}] {message}", flush=True)
 
 def load_config(path):
     """
@@ -57,29 +63,45 @@ def convert_pacific_utc(dt):
 
     return dt_utc.strftime('%Y-%m-%dT%H:%M:%S.000-0000')
 
+def normalize_business_date(date_value):
+    if not date_value:
+        return None
+    if isinstance(date_value, datetime):
+        return date_value.date().strftime('%Y-%m-%d')
+    if isinstance(date_value, date):
+        return date_value.strftime('%Y-%m-%d')
+    if isinstance(date_value, str):
+        stripped = date_value.strip()
+        if "-" in stripped:
+            return stripped
+        if len(stripped) == 8 and stripped.isdigit():
+            return f"{stripped[:4]}-{stripped[4:6]}-{stripped[6:]}"
+    return str(date_value)
+
 
 
 # Get all parameters for dates to be passed in APIs
 
 start_date_time = datetime.combine(date.today(), time(0, 0, 1))  # 00:00:01
-start_date = convert_pacific_utc(start_date_time.strftime('%Y-%m-%d'))
-end_datetime = datetime.combine(date.today(), time.min) + timedelta(days=1) - timedelta(seconds=1)
-end_date = convert_pacific_utc(end_datetime.strftime('%Y-%m-%d'))
+start_date = convert_pacific_utc(start_date_time.strftime('%Y-%m-%d %H:%M:%S'))
+end_datetime = datetime.combine(date.today(), time(23, 59, 59))
+end_date = convert_pacific_utc(end_datetime.strftime('%Y-%m-%d %H:%M:%S'))
 business_date = date.today().strftime('%Y%m%d')
+print(start_date,end_date,business_date)
 
 def main():
-    config = load_config('setting.ini')
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(script_dir, 'setting.ini')
+    config = load_config(config_path)
+    log(f"Loaded config from {config_path}")
     
     # Database connection details
     db_config = {
         'host': config['DATABASE']['host'],
         'user': config['DATABASE']['user'],
         'password': config['DATABASE']['password'],
-        'database': config['DATABASE']['database'],
-        'connect_timeout': 10
+        'database': config['DATABASE']['database']
     }
-
-    request_timeout = (10, 30)
     
     # Get all the URLs from the setting.ini 
     
@@ -89,15 +111,14 @@ def main():
     
     # Initiate the MySQL connection
     
-    print("Connecting to database...")
-    conn = pymysql.connect(**db_config, cursorclass=pymysql.cursors.DictCursor)
-    print("Database connected.")
-    cursor = conn.cursor()
+    conn = mysql.connector.connect(**db_config)
+    cursor = conn.cursor(dictionary=True)
     
-    print("Fetching onboarding records...")
     cursor.execute("SELECT RESTAURANTGUID,SECRETKEY,CLIENTSECRET,USERACCESSTYPE from GRATLYDB.SRC_ONBOARDING")
     get_results = cursor.fetchall()
-    print(f"Found {len(get_results)} onboarding records.")
+    if not get_results:
+        log("No rows found in GRATLYDB.SRC_ONBOARDING. Exiting.")
+        return
     
     for row in get_results:
         payload = {
@@ -108,13 +129,18 @@ def main():
         headers_init = row['RESTAURANTGUID']
         headers = {"Content-Type": "application/json"}
         authurl = 'https://ws-api.toasttab.com/authentication/v1/authentication/login'
-        print(f"Authenticating restaurant {headers_init}...")
-        response = requests.post(authurl, json=payload, headers=headers, timeout=request_timeout)
+        response = requests.post(authurl, json=payload, headers=headers)
+        if response.status_code != 200:
+            log(f"Auth failed for restaurant {headers_init}: {response.status_code} {response.text}")
+            continue
         
         data = response.json()
 
         pretty_json_output = json.dumps(data, indent=4)
         access_token = json.loads(pretty_json_output)
+        if 'token' not in access_token or 'accessToken' not in access_token['token']:
+            log(f"Auth token missing for restaurant {headers_init}: {pretty_json_output}")
+            continue
         accesstoken = f"Bearer {access_token['token']['accessToken']}"
         
         headers = {
@@ -129,8 +155,10 @@ def main():
             if url == 'https://ws-api.toasttab.com/restaurants/v1/restaurants/':
                 url = f"{url}{headers_init}"
                 # print(f"URL IS {url}")
-                print(f"Fetching restaurant details for {headers_init}...")
-                response = requests.get(url, headers=headers, timeout=request_timeout)
+                response = requests.get(url, headers=headers)
+                if response.status_code != 200:
+                    log(f"Restaurant API failed for {headers_init}: {response.status_code} {response.text}")
+                    continue
                 data = response.json()
                 
                 # pretty_json_output = json.dumps(data, indent=4)
@@ -145,13 +173,20 @@ def main():
                 try:
                     cursor.executemany(restaurant_sql_query, restaurant_sql_data)
                     conn.commit()
-                except:
+                    log(f"Inserted restaurant details for {headers_init}")
+                except Exception as e:
+                    log(f"Insert restaurant details failed for {headers_init}: {e}")
                     conn.rollback()
             
             if url == 'https://ws-api.toasttab.com/labor/v1/jobs':
-                print(f"Fetching jobs for {headers_init}...")
-                response = requests.get(url, headers=headers, timeout=request_timeout)
+                response = requests.get(url, headers=headers)
+                if response.status_code != 200:
+                    log(f"Jobs API failed for {headers_init}: {response.status_code} {response.text}")
+                    continue
                 data = response.json()    
+                if not data:
+                    log(f"No jobs returned for {headers_init}")
+                    continue
                 
                 # SQL query to insert data
                 jobs_sql_query = "INSERT INTO GRATLYDB.SRC_JOBS(RESTAURANTGUID,JOBGUID,JOBTITLE,ENTITYTYPE,CREATEDDATE,DELETED,DELETEDDATE,CODE,TIPPED,DEFAULTWAGE,WAGEFREQUENCY) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
@@ -159,14 +194,21 @@ def main():
 
                 try:
                     cursor.executemany(jobs_sql_query, jobs_sql_data)
-                    conn.commit()  
-                except:
+                    conn.commit()
+                    log(f"Inserted {len(jobs_sql_data)} jobs for {headers_init}")
+                except Exception as e:
+                    log(f"Insert jobs failed for {headers_init}: {e}")
                     conn.rollback()   
                 
             if url == 'https://ws-api.toasttab.com/labor/v1/employees':
-                print(f"Fetching employees for {headers_init}...")
-                response = requests.get(url, headers=headers, timeout=request_timeout)
+                response = requests.get(url, headers=headers)
+                if response.status_code != 200:
+                    log(f"Employees API failed for {headers_init}: {response.status_code} {response.text}")
+                    continue
                 data = response.json()    
+                if not data:
+                    log(f"No employees returned for {headers_init}")
+                    continue
                 
                 # SQL query to insert data
                 employees_sql_query = "INSERT INTO GRATLYDB.SRC_EMPLOYEES (RESTAURANTGUID,EMPLOYEEGUID,EMPLOYEEFNAME,EMPLOYEELNAME,CHOSENNAME,PHONENUMBER,EMAIL,DELETED,DELETEDDATE) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
@@ -174,8 +216,10 @@ def main():
 
                 try:
                     cursor.executemany(employees_sql_query, employees_sql_data)
-                    conn.commit() 
-                except:
+                    conn.commit()
+                    log(f"Inserted {len(employees_sql_data)} employees for {headers_init}")
+                except Exception as e:
+                    log(f"Insert employees failed for {headers_init}: {e}")
                     conn.rollback()    
                 
                 # Prepare data for insertion (list of tuples)
@@ -198,7 +242,9 @@ def main():
                 try:
                     cursor.executemany(employee_job_sql_query, employeejobs_to_insert)
                     conn.commit()
-                except:
+                    log(f"Inserted {len(employeejobs_to_insert)} employee roles for {headers_init}")
+                except Exception as e:
+                    log(f"Insert employee roles failed for {headers_init}: {e}")
                     conn.rollback()    
                 
             if url == 'https://ws-api.toasttab.com/labor/v1/timeEntries':
@@ -209,9 +255,14 @@ def main():
                     "includeArchived": "true",
                     "includeMissedBreaks": "true"
                     }
-                print(f"Fetching time entries for {headers_init}...")
-                response = requests.get(url, headers=headers, params=query, timeout=request_timeout)
+                response = requests.get(url, headers=headers, params=query)
+                if response.status_code != 200:
+                    log(f"Time entries API failed for {headers_init}: {response.status_code} {response.text}")
+                    continue
                 data = response.json()   
+                if not data:
+                    log(f"No time entries returned for {headers_init} ({start_date} to {end_date})")
+                    continue
                  
                 timeentries_sql_data = []
                 
@@ -222,21 +273,28 @@ def main():
                 
 
                 timeentries_sql_data = [(headers_init,record['guid'],record['entityType'],record['externalId'],record['employeeReference']['guid'],record['jobReference']['guid'],record['shiftReference'],
-                                                convert_utc_pacific(record['inDate']),convert_utc_pacific(record['outDate']),record['businessDate'],record['regularHours'],record['overtimeHours'],record['hourlyWage'],
+                                                convert_utc_pacific(record['inDate']),convert_utc_pacific(record['outDate']),normalize_business_date(record['businessDate']),record['regularHours'],record['overtimeHours'],record['hourlyWage'],
                                                 record['tipsWithheld'],record['nonCashSales'],record['cashSales'],record['nonCashGratuityServiceCharges'],record['cashGratuityServiceCharges'],record['nonCashTips'],
                                                 record['declaredCashTips'],record['autoClockedOut'],record['deleted'],record['createdDate'],record['modifiedDate'],record.get('deletedDate',None)) for record in data]
                 
                 try:
                     cursor.executemany(timeentries_sql_query, timeentries_sql_data)
-                    conn.commit()  
-                except:
+                    conn.commit()
+                    log(f"Inserted {len(timeentries_sql_data)} time entries for {headers_init}")
+                except Exception as e:
+                    log(f"Insert time entries failed for {headers_init}: {e}")
                     conn.rollback()   
                     
             if url == 'https://ws-api.toasttab.com/config/v2/tables':
                         
-                print(f"Fetching tables for {headers_init}...")
-                response = requests.get(url, headers=headers, timeout=request_timeout)
+                response = requests.get(url, headers=headers)
+                if response.status_code != 200:
+                    log(f"Tables API failed for {headers_init}: {response.status_code} {response.text}")
+                    continue
                 data = response.json()    
+                if not data:
+                    log(f"No tables returned for {headers_init}")
+                    continue
                 
                 # SQL query to insert data
                 tables_sql_query = "INSERT INTO GRATLYDB.SRC_TABLES(RESTAURANTGUID,TABLEGUID,ENTITYTYPE,TABLENAME) VALUES (%s, %s, %s, %s)"
@@ -245,59 +303,91 @@ def main():
                         
                 try:
                     cursor.executemany(tables_sql_query, tables_sql_data)
-                    conn.commit()  
-                except:
+                    conn.commit()
+                    log(f"Inserted {len(tables_sql_data)} tables for {headers_init}")
+                except Exception as e:
+                    log(f"Insert tables failed for {headers_init}: {e}")
                     conn.rollback()   
                 
             if url == 'https://ws-api.toasttab.com/orders/v2/ordersBulk':
                 query = {
                         "businessDate": business_date
                         }
-                print(f"Fetching orders for {headers_init}...")
-                response = requests.get(url, headers=headers, params=query, timeout=request_timeout)
+                response = requests.get(url, headers=headers, params=query)
+                if response.status_code != 200:
+                    log(f"Orders API failed for {headers_init}: {response.status_code} {response.text}")
+                    continue
                 data = response.json()    
+                if not data:
+                    log(f"No orders returned for {headers_init} (businessDate {business_date})")
+                    continue
                 
                 all_orders_sql_data = []
                 
                 # SQL query to insert data
                 all_orders_sql_query = """INSERT INTO GRATLYDB.SRC_ALLORDERS(RESTAURANTGUID,ORDERGUID,DISPLAYNUMBER,BUSINESSDATE,ORDERSOURCE,TABLEGUID,ORDERPAIDDATE,VOIDED,OPENEDDATE,PREPTIME,PAYMENTTYPE,REFUNDSTATUS,PAYMENTSTATUS,NETAMOUNT,
-                                                    TIPAMOUNT,TAXAMOUNT,TOTALAMOUNT,EMPLOYEEGUID,NUMBEROFGUESTS,DURATION,APPROVALSTATUS) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+                                                    TIPAMOUNT,GRATUITYAMOUNT,TAXAMOUNT,TOTALAMOUNT,EMPLOYEEGUID,NUMBEROFGUESTS,DURATION,APPROVALSTATUS) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
                 
                 for record in data:
                     restaurantID = headers_init
-                    orderID = record['guid']
-                    displayNumber = record['displayNumber']
-                    businessDate = record['businessDate']
-                    orderSource = record['source']
-                    tableID = (record.get("table") or {}).get("guid"," ") 
-                    if record.get("checks", [{}])[0].get("paymentStatus") != 'OPEN':
-                        orderPaidDate = convert_utc_pacific(record['paidDate'])
-                        paymentType = record.get("checks", [{}])[0].get("payments", [{}])[0].get("type")
-                        refundStatus = record.get("checks", [{}])[0].get("payments", [{}])[0].get("refundStatus")
-                        paymentStatus = record.get("checks", [{}])[0].get("paymentStatus")
-                        netAmount = record.get("checks", [{}])[0].get("payments", [{}])[0].get("amount")
-                        tipAmount = record.get("checks", [{}])[0].get("payments", [{}])[0].get("tipAmount")
-                        taxAmount = record.get("checks", [{}])[0].get("taxAmount")
-                        totalAmount = record.get("checks", [{}])[0].get("totalAmount")
-                    else:
-                        orderPaidDate = '' 
-                        paymentType = ''
-                        refundStatus = ''
-                        paymentStatus = ''
-                        netAmount = 0.0
-                        tipAmount = 0.0
-                        taxAmount = 0.0
-                        totalAmount = 0.0
-                    voided = record['voided']
-                    openedDate = convert_utc_pacific(record['openedDate'])
-                    prepTime = record['requiredPrepTime']
-                    employeeID = record['server']['guid']
-                    numberOfGuests = record['numberOfGuests']
-                    duration = record['duration']
-                    approvalStatus = record['approvalStatus']
+                    orderID = record.get("guid")
+                    displayNumber = record.get("displayNumber")
+                    businessDate = normalize_business_date(record.get("businessDate"))
+                    orderSource = record.get("source")
+
+                    tableID = None
+                    if record.get("table"):
+                        tableID = record["table"].get("guid")
+
+                    openedDate = convert_utc_pacific(record.get("openedDate"))
+                    voided = record.get("voided")
+                    prepTime = record.get("requiredPrepTime")
+                    numberOfGuests = record.get("numberOfGuests")
+                    duration = record.get("duration")
+                    approvalStatus = record.get("approvalStatus")
+
+                    employeeID = None
+                    if record.get("server"):
+                        employeeID = record["server"].get("guid")
+
+                    # ---- SAFE CHECK / PAYMENT HANDLING ----
+                    checks = record.get("checks") or []
+
+                    paymentStatus = ""
+                    paymentType = ""
+                    refundStatus = ""
+                    netAmount = 0.0
+                    tipAmount = 0.0
+                    gratuityamount = 0.0
+                    taxAmount = 0.0
+                    totalAmount = 0.0
+                    orderPaidDate = None
+
+                    if checks:
+                        check = checks[0]
+                        paymentStatus = check.get("paymentStatus", "")
+                        taxAmount = check.get("taxAmount", 0.0)
+                        totalAmount = check.get("totalAmount", 0.0)
+
+                        payments = check.get("payments") or []
+                        if payments:
+                            for payment in payments:
+                            # payment = payments[0]
+                                paymentType = paymentType + payment.get("type", "")
+                                refundStatus = payment.get("refundStatus", "")
+                                netAmount = netAmount + payment.get("amount", 0.0)
+                                tipAmount = tipAmount + payment.get("tipAmount", 0.0)
+                            
+                        appsvccharges = check.get("appliedServiceCharges") or {}
+                        if appsvccharges:
+                            appsvccharge = appsvccharges[0]
+                            gratuityamount = appsvccharge.get("chargeAmount", "")
+
+                        if paymentStatus != "OPEN":
+                            orderPaidDate = convert_utc_pacific(record.get("paidDate"))
 
                     all_orders_sql_data.append([restaurantID,orderID,displayNumber,businessDate,orderSource,tableID,orderPaidDate,voided,openedDate,prepTime,paymentType,refundStatus,paymentStatus,netAmount,
-                                                        tipAmount,taxAmount,totalAmount,employeeID,numberOfGuests,duration,approvalStatus])
+                                                        tipAmount,gratuityamount,taxAmount,totalAmount,employeeID,numberOfGuests,duration,approvalStatus])
 
                 # all_orders_sql_data = [(headers_init,record['guid'],record['displayNumber'],record['businessDate'],record['source'],convert_utc_pacific(record['paidDate']),record['voided'],convert_utc_pacific(record['openedDate']),
                                         # record['requiredPrepTime'],record['checks']['payments']['type'],record['checks']['payments']['refundStatus'],record['checks']['paymentStatus'],record['checks']['payments']['amount'],
@@ -305,13 +395,16 @@ def main():
 
                 try:
                     cursor.executemany(all_orders_sql_query, all_orders_sql_data)
-                    conn.commit()  
-                except:
+                    conn.commit()
+                    log(f"Inserted {len(all_orders_sql_data)} orders for {headers_init}")
+                except Exception as e:
+                    log(f"Insert orders failed for {headers_init}: {e}")
                     conn.rollback()   
                               
                 
-        cursor.close()
-        conn.close()
+        if conn.is_connected():
+            cursor.close()
+            conn.close()
 
 if __name__ == "__main__":
     main()

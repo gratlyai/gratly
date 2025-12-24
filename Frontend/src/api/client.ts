@@ -34,4 +34,6 @@ export const api = {
   get: <T>(path: string, options?: RequestOptions) => request<T>(path, options),
   post: <T>(path: string, body?: JsonValue, options?: RequestOptions) =>
     request<T>(path, { ...options, method: "POST", body }),
+  put: <T>(path: string, body?: JsonValue, options?: RequestOptions) =>
+    request<T>(path, { ...options, method: "PUT", body }),
 };

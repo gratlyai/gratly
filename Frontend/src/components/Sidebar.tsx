@@ -11,7 +11,7 @@ export const Sidebar = () => {
         <Link to={`${businessBase}/home`}>Home</Link>
         <Link to={`${businessBase}/reconciliation`}>Reconciliation</Link>
         <Link to={`${businessBase}/shift-payout`}>Shift Payout</Link>
-        <Link to={`${businessBase}/employees`}>Employees</Link>
+        <Link to={`${businessBase}/team`}>Team</Link>
         <Link to={`${businessBase}/tip-pools`}>Tip Pools</Link>
         <Link to={`${businessBase}/distributions`}>Distributions</Link>
         <Link to={`${businessBase}/reports`}>Reports</Link>

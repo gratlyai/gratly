@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
+import { api } from './api/client';
 
 interface WidgetData {
-  totalRevenue: number;
-  revenueChange: number;
+  netSales: number;
+  netSalesChange: number;
   totalTips: number;
   tipsChange: number;
-  activeEmployees: number;
-  employeesChange: number;
+  totalGratuity: number;
+  gratuityChange: number;
   pendingPayouts: number;
   payoutsChange: number;
   recentTransactions: Array<{
@@ -20,13 +21,15 @@ interface WidgetData {
 }
 
 const GratlyHomeDashboard: React.FC = () => {
+  const storedUserName = localStorage.getItem('userName') || '';
+  const firstName = storedUserName.trim().split(/\s+/)[0] || 'there';
   const [widgetData, setWidgetData] = useState<WidgetData>({
-    totalRevenue: 48250.75,
-    revenueChange: 12.5,
-    totalTips: 15840.50,
-    tipsChange: 8.3,
-    activeEmployees: 42,
-    employeesChange: 5.2,
+    netSales: 0,
+    netSalesChange: 0,
+    totalTips: 0,
+    tipsChange: 0,
+    totalGratuity: 0,
+    gratuityChange: 0,
     pendingPayouts: 8450.25,
     payoutsChange: -3.1,
     recentTransactions: [
@@ -48,14 +51,34 @@ const GratlyHomeDashboard: React.FC = () => {
   });
 
   useEffect(() => {
-    // Simulate API calls - replace with actual API endpoints
     const fetchWidgetData = async () => {
-      // Example API call structure:
-      // const response = await fetch('https://api.example.com/dashboard-data');
-      // const data = await response.json();
-      // setWidgetData(data);
-      
-      console.log('Widget data ready for API integration');
+      try {
+        const data = await api.get<{
+          totalGratuity: number;
+          gratuityChange: number;
+          totalTips: number;
+          tipsChange: number;
+          netSales: number;
+          netSalesChange: number;
+        }>('/total-gratuity');
+        const totalGratuity = Number(data?.totalGratuity);
+        const gratuityChange = Number(data?.gratuityChange);
+        const totalTips = Number(data?.totalTips);
+        const tipsChange = Number(data?.tipsChange);
+        const netSales = Number(data?.netSales);
+        const netSalesChange = Number(data?.netSalesChange);
+        setWidgetData((prev) => ({
+          ...prev,
+          totalGratuity: Number.isFinite(totalGratuity) ? totalGratuity : prev.totalGratuity,
+          gratuityChange: Number.isFinite(gratuityChange) ? gratuityChange : prev.gratuityChange,
+          totalTips: Number.isFinite(totalTips) ? totalTips : prev.totalTips,
+          tipsChange: Number.isFinite(tipsChange) ? tipsChange : prev.tipsChange,
+          netSales: Number.isFinite(netSales) ? netSales : prev.netSales,
+          netSalesChange: Number.isFinite(netSalesChange) ? netSalesChange : prev.netSalesChange,
+        }));
+      } catch (error) {
+        console.error('Failed to load tips/gratuity metrics:', error);
+      }
     };
 
     fetchWidgetData();
@@ -77,30 +100,41 @@ const GratlyHomeDashboard: React.FC = () => {
   };
 
   const maxRevenue = Math.max(...widgetData.revenueChart.map(d => d.amount));
+  const tipsDelta = widgetData.totalTips - widgetData.tipsChange;
+  const tipsPercentChange =
+    widgetData.tipsChange === 0 ? 0 : (tipsDelta / widgetData.tipsChange) * 100;
+  const gratuityDelta = widgetData.totalGratuity - widgetData.gratuityChange;
+  const gratuityPercentChange =
+    widgetData.gratuityChange === 0 ? 0 : (gratuityDelta / widgetData.gratuityChange) * 100;
+  const netSalesDelta = widgetData.netSales - widgetData.netSalesChange;
+  const netSalesPercentChange =
+    widgetData.netSalesChange === 0 ? 0 : (netSalesDelta / widgetData.netSalesChange) * 100;
 
   return (
     <div className="p-8">
       <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900">Dashboard Overview</h1>
-          <p className="text-gray-600 mt-2">Welcome back! Here's what's happening today.</p>
+          <p className="text-gray-600 mt-2">Welcome back {firstName}! Here's what happened yesterday.</p>
         </div>
 
         {/* Top 4 Stat Widgets */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
-          {/* Widget 1: Total Revenue */}
+          {/* Widget 1: Net Sales */}
           <div className="bg-white rounded-xl shadow-md p-6 border border-gray-200 hover:shadow-lg transition-shadow">
             <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-medium text-gray-600">Total Revenue</h3>
+              <h3 className="text-sm font-medium text-gray-600">Net Sales</h3>
               <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
                 <span className="text-xl">💰</span>
               </div>
             </div>
             <div className="mb-2">
-              <p className="text-3xl font-bold text-gray-900">{formatCurrency(widgetData.totalRevenue)}</p>
+              <p className="text-3xl font-bold text-gray-900">{formatCurrency(widgetData.netSales)}</p>
             </div>
-            <div className={`flex items-center text-sm ${getChangeColor(widgetData.revenueChange)}`}>
-              <span className="font-semibold">{getChangeIcon(widgetData.revenueChange)} {Math.abs(widgetData.revenueChange)}%</span>
-              <span className="ml-2 text-gray-500">vs last month</span>
+            <div className={`flex items-center text-sm ${getChangeColor(netSalesPercentChange)}`}>
+              <span className="font-semibold">
+                {getChangeIcon(netSalesPercentChange)} {Math.abs(netSalesPercentChange).toFixed(1)}%
+              </span>
+              <span className="ml-2 text-gray-500">vs last week</span>
             </div>
           </div>
 
@@ -115,26 +149,30 @@ const GratlyHomeDashboard: React.FC = () => {
             <div className="mb-2">
               <p className="text-3xl font-bold text-gray-900">{formatCurrency(widgetData.totalTips)}</p>
             </div>
-            <div className={`flex items-center text-sm ${getChangeColor(widgetData.tipsChange)}`}>
-              <span className="font-semibold">{getChangeIcon(widgetData.tipsChange)} {Math.abs(widgetData.tipsChange)}%</span>
-              <span className="ml-2 text-gray-500">vs last month</span>
+            <div className={`flex items-center text-sm ${getChangeColor(tipsPercentChange)}`}>
+              <span className="font-semibold">
+                {getChangeIcon(tipsPercentChange)} {Math.abs(tipsPercentChange).toFixed(1)}%
+              </span>
+              <span className="ml-2 text-gray-500">vs last week</span>
             </div>
           </div>
 
-          {/* Widget 3: Active Employees */}
+          {/* Widget 3: Total Gratuity */}
           <div className="bg-white rounded-xl shadow-md p-6 border border-gray-200 hover:shadow-lg transition-shadow">
             <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-medium text-gray-600">Active Employees</h3>
+              <h3 className="text-sm font-medium text-gray-600">Total Gratuity</h3>
               <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
                 <span className="text-xl">👥</span>
               </div>
             </div>
             <div className="mb-2">
-              <p className="text-3xl font-bold text-gray-900">{widgetData.activeEmployees}</p>
+              <p className="text-3xl font-bold text-gray-900">{formatCurrency(widgetData.totalGratuity)}</p>
             </div>
-            <div className={`flex items-center text-sm ${getChangeColor(widgetData.employeesChange)}`}>
-              <span className="font-semibold">{getChangeIcon(widgetData.employeesChange)} {Math.abs(widgetData.employeesChange)}%</span>
-              <span className="ml-2 text-gray-500">vs last month</span>
+            <div className={`flex items-center text-sm ${getChangeColor(gratuityPercentChange)}`}>
+              <span className="font-semibold">
+                {getChangeIcon(gratuityPercentChange)} {Math.abs(gratuityPercentChange).toFixed(1)}%
+              </span>
+              <span className="ml-2 text-gray-500">vs last week</span>
             </div>
           </div>
 

@@ -109,7 +109,7 @@ const GratlyProfilePage: React.FC = () => {
               {!isEditing ? (
                 <button
                   onClick={handleEdit}
-                  className="bg-gray-900 text-white px-6 py-2 rounded-lg font-semibold hover:bg-gray-800 transition-all shadow-md"
+                  className="bg-[#cab99a] text-black px-6 py-2 rounded-lg font-semibold hover:bg-[#bfa986] transition-all shadow-md"
                 >
                   Edit Profile
                 </button>
@@ -123,7 +123,7 @@ const GratlyProfilePage: React.FC = () => {
                   </button>
                   <button
                     onClick={handleSave}
-                    className="bg-gray-900 text-white px-6 py-2 rounded-lg font-semibold hover:bg-gray-800 transition-all shadow-md"
+                    className="bg-[#cab99a] text-black px-6 py-2 rounded-lg font-semibold hover:bg-[#bfa986] transition-all shadow-md"
                   >
                     Save Changes
                   </button>
