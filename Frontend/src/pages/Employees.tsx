@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import type { Employee } from "../api/employees";
 import { fetchEmployees } from "../api/employees";
+import { api } from "../api/client";
 
 const formatValue = (value: string | null | undefined) => {
   if (!value) {
@@ -23,14 +24,27 @@ const formatPhoneNumber = (value: string | null | undefined) => {
 };
 
 export default function Employees() {
+  const [userId, setUserId] = useState<number | null>(null);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showAllEmployees, setShowAllEmployees] = useState(false);
   const [pendingInvites, setPendingInvites] = useState<Record<string, boolean>>({});
+  const [inviteSending, setInviteSending] = useState<Record<string, boolean>>({});
+  const [inviteErrors, setInviteErrors] = useState<Record<string, string>>({});
   const isInactive = (status: string) => status.trim().toLowerCase() === "inactive";
   const activeEmployees = employees.filter((employee) => !isInactive(employee.is_active));
   const inactiveEmployees = employees.filter((employee) => isInactive(employee.is_active));
   const visibleEmployees = showAllEmployees ? employees : activeEmployees;
+
+  useEffect(() => {
+    const storedUserId = localStorage.getItem("userId");
+    if (storedUserId) {
+      const parsedId = Number(storedUserId);
+      if (Number.isFinite(parsedId)) {
+        setUserId(parsedId);
+      }
+    }
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -53,8 +67,31 @@ export default function Employees() {
   const getEmployeeKey = (employee: Employee, index: number) =>
     employee.employeeGuid ?? employee.email ?? `employee-${index}`;
 
-  const markInvitePending = (key: string) => {
-    setPendingInvites((current) => ({ ...current, [key]: true }));
+  const sendInvite = async (employee: Employee, key: string) => {
+    if (!employee.email) {
+      return;
+    }
+    if (userId === null) {
+      setInviteErrors((current) => ({ ...current, [key]: "Please log in again to send invites." }));
+      return;
+    }
+    setInviteSending((current) => ({ ...current, [key]: true }));
+    setInviteErrors((current) => ({ ...current, [key]: "" }));
+    try {
+      await api.post("/team/invite", {
+        user_id: userId,
+        email: employee.email,
+        first_name: employee.firstName,
+        last_name: employee.lastName,
+        employee_guid: employee.employeeGuid,
+      });
+      setPendingInvites((current) => ({ ...current, [key]: true }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to send invite";
+      setInviteErrors((current) => ({ ...current, [key]: message }));
+    } finally {
+      setInviteSending((current) => ({ ...current, [key]: false }));
+    }
   };
 
   return (
@@ -118,6 +155,8 @@ export default function Employees() {
                       ? "bg-amber-100 text-amber-700"
                       : "bg-rose-100 text-rose-700";
                   const canInvite = Boolean(employee.email);
+                  const isSendingInvite = Boolean(inviteSending[employeeKey]);
+                  const inviteError = inviteErrors[employeeKey];
                   return (
                     <tr key={`${employeeKey}-${index}`} className="text-gray-700">
                       <td className="px-6 py-4">
@@ -146,13 +185,16 @@ export default function Employees() {
                             <button
                               type="button"
                               className="rounded-full border border-gray-300 px-3 py-1 text-xs font-semibold text-gray-700 transition hover:border-gray-400 hover:text-gray-900 disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-400"
-                              onClick={() => markInvitePending(employeeKey)}
-                              disabled={!canInvite}
+                              onClick={() => sendInvite(employee, employeeKey)}
+                              disabled={!canInvite || isSendingInvite}
                             >
-                              Send Invite
+                              {isSendingInvite ? "Sending..." : "Send Invite"}
                             </button>
                           ) : null}
                         </div>
+                        {inviteError ? (
+                          <p className="mt-2 text-xs font-medium text-rose-600">{inviteError}</p>
+                        ) : null}
                       </td>
                     </tr>
                   );

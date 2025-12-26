@@ -1,1 +1,11 @@
-/Library/Developer/CommandLineTools/usr/bin/python3: can't open file '/Users/svanik/Desktop/Gratly/DB/getalldata.py': [Errno 1] Operation not permitted
+/Users/svanik/Library/Python/3.9/lib/python/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+  warnings.warn(
+2025-12-23T08:00:01.000-0000 2025-12-24T07:59:59.000-0000 20251223
+[2025-12-23 23:00:02] Loaded config from /Users/svanik/Desktop/Gratly/DB/setting.ini
+[2025-12-23 23:00:02] Insert restaurant details failed for 0169bd32-becf-4b04-9093-d7d4db1dc242: 1062 (23000): Duplicate entry '0169bd32-becf-4b04-9093-d7d4db1dc242' for key 'src_restaurantdetails.PRIMARY'
+[2025-12-23 23:00:02] Insert jobs failed for 0169bd32-becf-4b04-9093-d7d4db1dc242: 1062 (23000): Duplicate entry '0169bd32-becf-4b04-9093-d7d4db1dc242-6464080a-0a67-4c73-ab7c-580' for key 'src_jobs.PRIMARY'
+[2025-12-23 23:00:03] Insert employees failed for 0169bd32-becf-4b04-9093-d7d4db1dc242: 1062 (23000): Duplicate entry '0169bd32-becf-4b04-9093-d7d4db1dc242-b3087617-018a-4f16-afcd-ad0' for key 'src_employees.PRIMARY'
+[2025-12-23 23:00:03] Insert employee roles failed for 0169bd32-becf-4b04-9093-d7d4db1dc242: 1062 (23000): Duplicate entry '0169bd32-becf-4b04-9093-d7d4db1dc242-76bef453-7937-4889-9113-704' for key 'src_employeerole.PRIMARY'
+[2025-12-23 23:00:03] Inserted 10 time entries for 0169bd32-becf-4b04-9093-d7d4db1dc242
+[2025-12-23 23:00:03] Insert tables failed for 0169bd32-becf-4b04-9093-d7d4db1dc242: 1062 (23000): Duplicate entry '0169bd32-becf-4b04-9093-d7d4db1dc242-01732247-4cd4-41ab-95e1-2df' for key 'src_tables.PRIMARY'
+[2025-12-23 23:00:04] Inserted 63 orders for 0169bd32-becf-4b04-9093-d7d4db1dc242

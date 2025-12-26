@@ -13,7 +13,7 @@ import { fetchUserPermissions } from "../api/permissions";
 type NavItem = {
   label: string;
   to: string;
-  permissionKey?: "home" | "approvals" | "shift-payout" | "team" | "reports" | "settings";
+  permissionKey?: "home" | "approvals" | "shift-payout" | "team" | "reports" | "settings" | "profile";
   icon: React.ReactNode;
 };
 
@@ -122,6 +122,9 @@ const AppLayout: React.FC = () => {
     }
     if (key === "team") {
       return permissions.manageTeam;
+    }
+    if (key === "profile") {
+      return true;
     }
     if (key === "settings") {
       return false;

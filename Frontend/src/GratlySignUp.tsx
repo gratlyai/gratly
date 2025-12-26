@@ -6,6 +6,7 @@ import gratlyLogo from './assets/gratlylogodash.png';
 const GratlySignUp: React.FC = () => {
   const [email, setEmail] = useState<string>('');
   const [password, setPassword] = useState<string>('');
+  const [showPassword, setShowPassword] = useState<boolean>(false);
   const [firstName, setFirstName] = useState<string>('');
   const [lastName, setLastName] = useState<string>('');
   const [phoneNumber, setPhoneNumber] = useState<string>('+1 ');
@@ -323,23 +324,64 @@ const handleSignUp = async () => {
               >
                 Password
               </label>
-              <input
-                id="password"
-                type="password"
-                value={password}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                  setPassword(e.target.value);
-                  if (e.target.value) {
-                    validatePassword(e.target.value);
-                  } else {
-                    setPasswordError('');
-                  }
-                }}
-                className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent outline-none transition-all ${
-                  passwordError ? 'border-red-500' : 'border-gray-300'
-                }`}
-                placeholder="••••••••"
-              />
+              <div className="relative">
+                <input
+                  id="password"
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                    setPassword(e.target.value);
+                    if (e.target.value) {
+                      validatePassword(e.target.value);
+                    } else {
+                      setPasswordError('');
+                    }
+                  }}
+                  className={`w-full px-4 py-3 pr-12 border rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent outline-none transition-all ${
+                    passwordError ? 'border-red-500' : 'border-gray-300'
+                  }`}
+                  placeholder="••••••••"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  aria-pressed={showPassword}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-800 text-sm font-medium"
+                >
+                  {showPassword ? (
+                    <svg
+                      aria-hidden="true"
+                      viewBox="0 0 24 24"
+                      className="h-5 w-5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.75"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M2.1 12s3.6-6 9.9-6 9.9 6 9.9 6-3.6 6-9.9 6-9.9-6-9.9-6Z" />
+                      <path d="M9.9 12a2.1 2.1 0 1 0 4.2 0 2.1 2.1 0 0 0-4.2 0Z" />
+                    </svg>
+                  ) : (
+                    <svg
+                      aria-hidden="true"
+                      viewBox="0 0 24 24"
+                      className="h-5 w-5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.75"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M3 3l18 18" />
+                      <path d="M9.8 9.8a2.1 2.1 0 0 0 2.9 2.9" />
+                      <path d="M6.2 6.2C4.2 7.6 2.7 9.6 2.1 12c1.4 3.5 5 6 9.9 6 1.6 0 3-.3 4.3-.9" />
+                      <path d="M14.1 5.4c2.8.6 5.1 2.6 6.2 5.6-.6 1.4-1.5 2.6-2.7 3.6" />
+                    </svg>
+                  )}
+                </button>
+              </div>
               {passwordError && (
                 <p className="text-red-600 text-xs mt-2">{passwordError}</p>
               )}

@@ -9,6 +9,8 @@ import Settings from "./pages/Settings";
 import Reconciliation from "./pages/Reconciliation";
 import GratlyShiftPayout from "./GratlyShiftPayout";
 import GratlyProfile from "./GratlyProfile";
+import PasswordReset from "./pages/PasswordReset";
+import PasswordResetForm from "./pages/PasswordResetForm";
 import { PrivateRoute } from "./auth/PrivateRoute";
 import AppLayout from "./layouts/AppLayout";
 
@@ -17,6 +19,8 @@ export default function App() {
     <Routes>
       <Route path="/" element={<GratlyLogin />} />
       <Route path="/login" element={<GratlyLogin />} />
+      <Route path="/forgot-password" element={<PasswordReset />} />
+      <Route path="/reset-password" element={<PasswordResetForm />} />
       <Route path="/signup" element={<GratlySignUp />} />
       <Route
         path="/business/:restaurantKey"

@@ -1,161 +1,41 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import pymysql
-import os
-from dotenv import load_dotenv
-import configparser
-import hashlib
-import json
 from pydantic import BaseModel
-from typing import List, Optional, Any
-from datetime import date, timedelta
+from typing import List, Optional
 
-def _prehash(password: str) -> str:
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
-
-def hash_password(password: str) -> str:
-    return _prehash(password)
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return _prehash(plain_password) == hashed_password
-
-def _serialize_date(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    if isinstance(value, date):
-        return value.isoformat()
-    return str(value)
-
-def _serialize_time(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    if isinstance(value, timedelta):
-        total_seconds = int(value.total_seconds())
-        hours = (total_seconds // 3600) % 24
-        minutes = (total_seconds % 3600) // 60
-        seconds = total_seconds % 60
-        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-    return str(value)
-
-def _deserialize_form(row: Optional[dict]) -> Optional[dict]:
-    if not row:
-        return row
-    row["start_date"] = _serialize_date(row.get("start_date"))
-    row["end_date"] = _serialize_date(row.get("end_date"))
-    row["start_time"] = _serialize_time(row.get("start_time"))
-    row["end_time"] = _serialize_time(row.get("end_time"))
-    row["funds_from"] = json.loads(row["funds_from"] or "[]")
-    row["positions_pay_into"] = json.loads(row["positions_pay_into"] or "[]")
-    row["positions_paid_from_sales"] = json.loads(row["positions_paid_from_sales"] or "[]")
-    row["positions_paid_from_tips"] = json.loads(row["positions_paid_from_tips"] or "[]")
-    row["tip_percentages"] = json.loads(row["tip_percentages"] or "{}")
-    row["flat_rate_positions"] = json.loads(row["flat_rate_positions"] or "[]")
-    return row
-
-def _get_cursor(dictionary: bool = True):
-    if not DB_CONFIG:
-        raise HTTPException(status_code=500, detail="Database connection not initialized.")
-    try:
-        connection_config = dict(DB_CONFIG)
-        if dictionary:
-            connection_config["cursorclass"] = pymysql.cursors.DictCursor
-        connection = pymysql.connect(**connection_config)
-        cursor = connection.cursor()
-    except pymysql.MySQLError as err:
-        raise HTTPException(status_code=500, detail=f"Database connection error: {err}")
-
-    original_close = cursor.close
-
-    def _close():
-        try:
-            original_close()
-        finally:
-            connection.close()
-
-    cursor.close = _close
-    return cursor
-
-def _fetch_restaurant_key(user_id: int) -> Optional[int]:
-    cursor = _get_cursor(dictionary=True)
-    try:
-        cursor.execute(
-            "SELECT RESTAURANTID AS restaurant_id FROM GRATLYDB.USERRESTAURANT WHERE USERID = %s LIMIT 1",
-            (user_id,),
-        )
-        row = cursor.fetchone()
-        return row["restaurant_id"] if row else None
-    finally:
-        cursor.close()
-
-def _fetch_restaurant_name(user_id: int) -> Optional[str]:
-    cursor = _get_cursor(dictionary=True)
-    try:
-        cursor.execute(
-            """
-            SELECT rd.RESTAURANTNAME AS restaurant_name
-            FROM GRATLYDB.USERRESTAURANT ur
-            JOIN GRATLYDB.SRC_ONBOARDING ob ON ur.RESTAURANTID = ob.RESTAURANTID
-            JOIN GRATLYDB.SRC_RESTAURANTDETAILS rd ON rd.RESTAURANTGUID = ob.RESTAURANTGUID
-            WHERE ur.USERID = %s
-            LIMIT 1
-            """,
-            (user_id,),
-        )
-        row = cursor.fetchone()
-        return row["restaurant_name"] if row else None
-    finally:
-        cursor.close()
-
-def _serialize_permissions(row: Optional[dict]) -> Optional[dict]:
-    if not row:
-        return None
-    return {
-        "createPayoutSchedules": bool(row.get("isCreatePayoutSchedule")),
-        "approvePayouts": bool(row.get("isApprovePayout")),
-        "manageTeam": bool(row.get("isManageEmployees")),
-        "adminAccess": bool(row.get("isAdmin")),
-        "employeeOnly": bool(row.get("isEmployee")),
-    }
-
-def _fetch_restaurant_id_for_email(email: str) -> Optional[int]:
-    cursor = _get_cursor(dictionary=True)
-    try:
-        cursor.execute(
-            """
-            SELECT ob.RESTAURANTID AS restaurant_id
-            FROM GRATLYDB.SRC_EMPLOYEES se
-            JOIN GRATLYDB.SRC_ONBOARDING ob ON se.RESTAURANTGUID = ob.RESTAURANTGUID
-            WHERE se.EMAIL = %s
-            LIMIT 1
-            """,
-            (email,),
-        )
-        row = cursor.fetchone()
-        return row["restaurant_id"] if row else None
-    finally:
-        cursor.close()
-
-load_dotenv()
-
-def _load_db_config_from_ini(path: str) -> dict:
-    parser = configparser.ConfigParser()
-    if not os.path.exists(path):
-        return {}
-    parser.read(path)
-    if "DATABASE" not in parser:
-        return {}
-    section = parser["DATABASE"]
-    return {
-        "DB_HOST": section.get("host"),
-        "DB_USER": section.get("user"),
-        "DB_PASSWORD": section.get("password"),
-        "DB_NAME": section.get("database"),
-    }
-
-_ini_db_config = _load_db_config_from_ini(os.path.join(os.path.dirname(__file__), "setting.ini"))
-
-def _get_env_or_ini(key: str) -> Optional[str]:
-    return os.getenv(key) or _ini_db_config.get(key)
+try:
+    from Backend.security import hash_password, verify_password
+    from Backend.email_utils import send_sendgrid_email
+    from Backend.db import (
+        _get_cursor,
+        _fetch_restaurant_key,
+        _fetch_restaurant_name,
+        _fetch_restaurant_guid,
+        _fetch_user_permission_flags,
+        _fetch_employee_guid_for_user,
+        _serialize_permissions,
+        _fetch_restaurant_id_for_email,
+        _get_env_or_ini,
+    )
+    from Backend.payout_schedules import router as payout_schedules_router
+    from Backend.password_reset import router as password_reset_router
+except ImportError:
+    from db import (
+        _get_cursor,
+        _fetch_restaurant_key,
+        _fetch_restaurant_name,
+        _fetch_restaurant_guid,
+        _fetch_user_permission_flags,
+        _fetch_employee_guid_for_user,
+        _serialize_permissions,
+        _fetch_restaurant_id_for_email,
+        _get_env_or_ini,
+    )
+    from payout_schedules import router as payout_schedules_router
+    from password_reset import router as password_reset_router
+    from security import hash_password, verify_password
+    from email_utils import send_sendgrid_email
 
 app = FastAPI()
 
@@ -173,97 +53,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ MySQL connection
-DB_CONFIG = {}
-try:
-    DB_CONFIG = {
-        "host": _get_env_or_ini("DB_HOST"),
-        "user": _get_env_or_ini("DB_USER"),
-        "password": _get_env_or_ini("DB_PASSWORD"),
-        "database": _get_env_or_ini("DB_NAME"),
-        "autocommit": True, # Ensure changes are committed immediately for table creation
-    }
-    db = pymysql.connect(**DB_CONFIG)
-    cursor = db.cursor()
-
-    # Create user master table if it doesn't exist.
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS USER_MASTER (
-            USERID INT AUTO_INCREMENT PRIMARY KEY,
-            FIRSTNAME VARCHAR(32) NOT NULL,
-            LASTNAME VARCHAR(32) NOT NULL,
-            EMAIL VARCHAR(64) NOT NULL UNIQUE,
-            PHONENUMBER VARCHAR(32),
-            PASSWORD_HASH VARCHAR(255) NOT NULL,
-            CREATEDAT TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    # Create forms table if it doesn't exist
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS forms (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            user_id INT NOT NULL,
-            name VARCHAR(255) NOT NULL,
-            start_date DATE,
-            end_date DATE,
-            start_time TIME,
-            end_time TIME,
-            order_calculation VARCHAR(50),
-            tip_pool_type VARCHAR(50),
-            funds_from JSON,
-            tip_division VARCHAR(255),
-            positions_pay_into JSON,
-            positions_paid_from_sales JSON,
-            positions_paid_from_tips JSON,
-            tip_percentages JSON,
-            flat_rate_positions JSON,
-            flat_rate_amount DECIMAL(10, 2),
-            flat_rate_type VARCHAR(50),
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES USER_MASTER(USERID)
-        )
-    """)
-
-    db.commit() # Commit the table creations
-
-    cursor.close()
-    db.close()
-
-except pymysql.MySQLError as err:
-    raise HTTPException(status_code=500, detail=f"Database connection error: {err}")
+app.include_router(payout_schedules_router)
+app.include_router(password_reset_router)
 
 print("DB HOST:", _get_env_or_ini("DB_HOST"))
 print("DB USER:", _get_env_or_ini("DB_USER"))
 print("DB NAME:", _get_env_or_ini("DB_NAME"))
-
-# Pydantic models for forms
-class FormCreate(BaseModel):
-    user_id: int  # Temporarily, this will come from frontend; later from JWT
-    name: str
-    start_date: Optional[str] = None  # Using str for date/time to match frontend input type
-    end_date: Optional[str] = None
-    start_time: Optional[str] = None
-    end_time: Optional[str] = None
-    order_calculation: Optional[str] = None
-    tip_pool_type: Optional[str] = None
-    funds_from: Optional[List[dict]] = None
-    tip_division: Optional[str] = None
-    positions_pay_into: Optional[List[str]] = None
-    positions_paid_from_sales: Optional[List[str]] = None
-    positions_paid_from_tips: Optional[List[str]] = None
-    tip_percentages: Optional[dict] = None
-    flat_rate_positions: Optional[List[str]] = None
-    flat_rate_amount: Optional[float] = None  # Changed to float for numerical value
-    flat_rate_type: Optional[str] = None
-
-class FormResponse(FormCreate):
-    id: int
-    created_at: Any # datetime object from DB will be returned here
-
-class FormsDeleteRequest(BaseModel):
-    user_id: int
-    form_ids: List[int]
 
 class EmployeeResponse(BaseModel):
     userId: Optional[int] = None
@@ -274,6 +69,19 @@ class EmployeeResponse(BaseModel):
     email: Optional[str] = None
     is_active: str
 
+class UserProfileResponse(BaseModel):
+    firstName: Optional[str] = None
+    lastName: Optional[str] = None
+    email: Optional[str] = None
+    phoneNumber: Optional[str] = None
+    restaurantName: Optional[str] = None
+
+class UserProfileUpdatePayload(BaseModel):
+    firstName: Optional[str] = None
+    lastName: Optional[str] = None
+    email: Optional[str] = None
+    phoneNumber: Optional[str] = None
+
 class UserPermissionsPayload(BaseModel):
     createPayoutSchedules: bool
     approvePayouts: bool
@@ -281,56 +89,55 @@ class UserPermissionsPayload(BaseModel):
     adminAccess: bool
     employeeOnly: bool
 
+class TeamInvitePayload(BaseModel):
+    user_id: int
+    email: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    employee_guid: Optional[str] = None
 
-@app.post("/forms", response_model=FormResponse)
-def create_form(form: FormCreate):
-    cursor = _get_cursor(dictionary=True)
-    try:
-        funds_from = form.funds_from or []
-        positions_pay_into = form.positions_pay_into or []
-        positions_paid_from_sales = form.positions_paid_from_sales or []
-        positions_paid_from_tips = form.positions_paid_from_tips or []
-        tip_percentages = form.tip_percentages or {}
-        flat_rate_positions = form.flat_rate_positions or []
-        query = """
-            INSERT INTO forms (
-                user_id, name, start_date, end_date, start_time, end_time,
-                order_calculation, tip_pool_type, funds_from, tip_division,
-                positions_pay_into, positions_paid_from_sales, positions_paid_from_tips,
-                tip_percentages, flat_rate_positions, flat_rate_amount, flat_rate_type
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+def _send_sendgrid_email(to_email: str, subject: str, content: str, sender_name: Optional[str] = None):
+    send_sendgrid_email(to_email=to_email, subject=subject, content=content, sender_name=sender_name)
+
+def _insert_invite_log(cursor, payload: TeamInvitePayload, status: str, provider_response: Optional[str] = None) -> int:
+    cursor.execute(
         """
-        cursor.execute(query, (
-            form.user_id, form.name, form.start_date, form.end_date, form.start_time, form.end_time,
-            form.order_calculation, form.tip_pool_type, json.dumps(funds_from),
-            form.tip_division, json.dumps(positions_pay_into),
-            json.dumps(positions_paid_from_sales), json.dumps(positions_paid_from_tips),
-            json.dumps(tip_percentages), json.dumps(flat_rate_positions),
-            form.flat_rate_amount, form.flat_rate_type
-        ))
-        cursor.connection.commit()
+        INSERT INTO GRATLYDB.EMAIL_INVITES (
+            USERID,
+            EMPLOYEEGUID,
+            EMAIL,
+            FIRSTNAME,
+            LASTNAME,
+            STATUS,
+            PROVIDER,
+            PROVIDER_RESPONSE
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            payload.user_id,
+            payload.employee_guid,
+            payload.email,
+            payload.first_name,
+            payload.last_name,
+            status,
+            "sendgrid",
+            provider_response,
+        ),
+    )
+    return cursor.lastrowid
 
-        form_id = cursor.lastrowid
-        cursor.execute("SELECT * FROM forms WHERE id = %s", (form_id,))
-        new_form = cursor.fetchone()
-        return _deserialize_form(new_form)
-    except pymysql.MySQLError as err:
-        raise HTTPException(status_code=500, detail=f"Error creating form: {err}")
-    finally:
-        cursor.close()
+def _update_invite_log(cursor, invite_id: int, status: str, provider_response: Optional[str] = None):
+    cursor.execute(
+        """
+        UPDATE GRATLYDB.EMAIL_INVITES
+        SET STATUS = %s,
+            PROVIDER_RESPONSE = %s
+        WHERE INVITEID = %s
+        """,
+        (status, provider_response, invite_id),
+    )
 
-@app.get("/forms", response_model=List[FormResponse])
-def get_forms(user_id: int): # user_id will eventually come from JWT
-    cursor = _get_cursor(dictionary=True)
-    try:
-        cursor.execute("SELECT * FROM forms WHERE user_id = %s", (user_id,))
-        forms = cursor.fetchall()
-        return [_deserialize_form(form) for form in forms]
-    except pymysql.MySQLError as err:
-        raise HTTPException(status_code=500, detail=f"Error fetching forms: {err}")
-    finally:
-        cursor.close()
 
 @app.get("/employees", response_model=List[EmployeeResponse])
 def get_employees():
@@ -358,12 +165,108 @@ def get_employees():
     finally:
         cursor.close()
 
-@app.get("/total-gratuity")
-def get_total_gratuity():
+@app.post("/team/invite")
+def send_team_invite(payload: TeamInvitePayload):
+    email = payload.email.strip() if payload.email else ""
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
+    restaurant_name = _fetch_restaurant_name(payload.user_id) or "Gratly"
+    recipient_name = " ".join(
+        part for part in [payload.first_name or "", payload.last_name or ""] if part.strip()
+    ).strip()
+    greeting = f"Hi {recipient_name}," if recipient_name else "Hi,"
+    message = (
+        f"{greeting}\n\n"
+        f"You've been invited to Gratly by {restaurant_name}.\n"
+        "Please create your account to access your shifts and payouts.\n\n"
+        "If you weren't expecting this invite, you can ignore this email."
+    )
+    cursor = _get_cursor(dictionary=False)
+    conn = cursor.connection
+    invite_id = None
+    try:
+        invite_id = _insert_invite_log(cursor, payload, "pending")
+        conn.commit()
+        _send_sendgrid_email(
+            to_email=email,
+            subject=f"You're invited to Gratly by {restaurant_name}",
+            content=message,
+            sender_name=restaurant_name,
+        )
+        _update_invite_log(cursor, invite_id, "sent")
+        conn.commit()
+        return {"success": True, "invite_id": invite_id}
+    except HTTPException as err:
+        if invite_id is None:
+            try:
+                invite_id = _insert_invite_log(cursor, payload, "failed", err.detail)
+                conn.commit()
+            except pymysql.MySQLError:
+                conn.rollback()
+        else:
+            try:
+                _update_invite_log(cursor, invite_id, "failed", err.detail)
+                conn.commit()
+            except pymysql.MySQLError:
+                conn.rollback()
+        raise
+    except pymysql.MySQLError as err:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error logging invite: {err}")
+    finally:
+        cursor.close()
+
+@app.get("/job-titles", response_model=List[str])
+def get_job_titles(user_id: int):
     cursor = _get_cursor(dictionary=True)
     try:
+        restaurant_guid = _fetch_restaurant_guid(user_id)
+        if not restaurant_guid:
+            raise HTTPException(status_code=404, detail="Restaurant not found for user")
         cursor.execute(
             """
+            SELECT DISTINCT JOBTITLE AS jobTitle
+            FROM GRATLYDB.SRC_JOBS
+            WHERE RESTAURANTGUID = %s
+              AND JOBTITLE IS NOT NULL
+              AND JOBTITLE <> ''
+            ORDER BY JOBTITLE
+            """,
+            (restaurant_guid,),
+        )
+        rows = cursor.fetchall()
+        return [row["jobTitle"] for row in rows if row.get("jobTitle")]
+    except pymysql.MySQLError as err:
+        raise HTTPException(status_code=500, detail=f"Error fetching job titles: {err}")
+    finally:
+        cursor.close()
+
+@app.get("/total-gratuity")
+def get_total_gratuity(user_id: Optional[int] = None):
+    cursor = _get_cursor(dictionary=True)
+    try:
+        employee_guid = None
+        if user_id is not None:
+            permissions = _fetch_user_permission_flags(user_id)
+            if not permissions:
+                raise HTTPException(status_code=404, detail="User permissions not found")
+            is_admin = bool(permissions.get("isAdmin"))
+            is_employee = bool(permissions.get("isEmployee"))
+            if not is_admin:
+                if not is_employee:
+                    raise HTTPException(status_code=403, detail="User is not authorized to view totals")
+                employee_guid = _fetch_employee_guid_for_user(user_id)
+                if not employee_guid:
+                    raise HTTPException(status_code=404, detail="Employee not found for user")
+
+        timeentry_filter = ""
+        timeentry_params: tuple = ()
+        if employee_guid:
+            timeentry_filter = "WHERE EMPLOYEEGUID = %s"
+            timeentry_params = (employee_guid,)
+
+        cursor.execute(
+            f"""
             SELECT
                 COALESCE(SUM(CASE
                     WHEN BUSINESSDATE = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
@@ -388,15 +291,24 @@ def get_total_gratuity():
                     ELSE 0
                 END), 0) AS tips_change
             FROM GRATLYDB.SRC_TIMEENTRIES
-            """
+            {timeentry_filter}
+            """,
+            timeentry_params,
         )
         row = cursor.fetchone() or {}
         total_gratuity = row.get("total_gratuity") or 0
         gratuity_change = row.get("gratuity_change") or 0
         total_tips = row.get("total_tips") or 0
         tips_change = row.get("tips_change") or 0
+
+        order_filter = ""
+        order_params: tuple = ()
+        if employee_guid:
+            order_filter = "WHERE EMPLOYEEGUID = %s"
+            order_params = (employee_guid,)
+
         cursor.execute(
-            """
+            f"""
             SELECT
                 COALESCE(SUM(CASE
                     WHEN BUSINESSDATE = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
@@ -409,7 +321,9 @@ def get_total_gratuity():
                     ELSE 0
                 END), 0) AS net_sales_change
             FROM GRATLYDB.SRC_ALLORDERS
-            """
+            {order_filter}
+            """,
+            order_params,
         )
         net_sales_row = cursor.fetchone() or {}
         net_sales = net_sales_row.get("net_sales") or 0
@@ -455,6 +369,108 @@ def get_employee(employee_guid: str):
         return employee
     except pymysql.MySQLError as err:
         raise HTTPException(status_code=500, detail=f"Error fetching employee: {err}")
+    finally:
+        cursor.close()
+
+@app.get("/user-profile/{user_id}", response_model=UserProfileResponse)
+def get_user_profile(user_id: int):
+    cursor = _get_cursor(dictionary=True)
+    try:
+        cursor.execute(
+            """
+            SELECT
+                FIRSTNAME AS firstName,
+                LASTNAME AS lastName,
+                EMAIL AS email,
+                PHONENUMBER AS phoneNumber
+            FROM USER_MASTER
+            WHERE USERID = %s
+            LIMIT 1
+            """,
+            (user_id,),
+        )
+        profile = cursor.fetchone()
+        if not profile:
+            raise HTTPException(status_code=404, detail="User profile not found")
+        profile["restaurantName"] = _fetch_restaurant_name(user_id)
+        return profile
+    except pymysql.MySQLError as err:
+        raise HTTPException(status_code=500, detail=f"Error fetching user profile: {err}")
+    finally:
+        cursor.close()
+
+@app.put("/user-profile/{user_id}", response_model=UserProfileResponse)
+def update_user_profile(user_id: int, payload: UserProfileUpdatePayload):
+    cursor = _get_cursor(dictionary=True)
+    try:
+        cursor.execute(
+            "SELECT USERID AS userId FROM USER_MASTER WHERE USERID = %s LIMIT 1",
+            (user_id,),
+        )
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="User profile not found")
+
+        email = payload.email.strip() if payload.email is not None else None
+        if email is not None and not email:
+            raise HTTPException(status_code=400, detail="Email is required")
+
+        if email:
+            cursor.execute(
+                """
+                SELECT USERID AS userId
+                FROM USER_MASTER
+                WHERE EMAIL = %s AND USERID <> %s
+                LIMIT 1
+                """,
+                (email, user_id),
+            )
+            if cursor.fetchone():
+                raise HTTPException(status_code=400, detail="Email already exists")
+
+        def _normalize(value: Optional[str]) -> Optional[str]:
+            if value is None:
+                return None
+            return value.strip()
+
+        cursor.execute(
+            """
+            UPDATE USER_MASTER
+            SET
+                FIRSTNAME = COALESCE(%s, FIRSTNAME),
+                LASTNAME = COALESCE(%s, LASTNAME),
+                EMAIL = COALESCE(%s, EMAIL),
+                PHONENUMBER = COALESCE(%s, PHONENUMBER)
+            WHERE USERID = %s
+            """,
+            (
+                _normalize(payload.firstName),
+                _normalize(payload.lastName),
+                email,
+                _normalize(payload.phoneNumber),
+                user_id,
+            ),
+        )
+
+        cursor.execute(
+            """
+            SELECT
+                FIRSTNAME AS firstName,
+                LASTNAME AS lastName,
+                EMAIL AS email,
+                PHONENUMBER AS phoneNumber
+            FROM USER_MASTER
+            WHERE USERID = %s
+            LIMIT 1
+            """,
+            (user_id,),
+        )
+        profile = cursor.fetchone()
+        if not profile:
+            raise HTTPException(status_code=404, detail="User profile not found")
+        profile["restaurantName"] = _fetch_restaurant_name(user_id)
+        return profile
+    except pymysql.MySQLError as err:
+        raise HTTPException(status_code=500, detail=f"Error updating user profile: {err}")
     finally:
         cursor.close()
 
@@ -534,89 +550,6 @@ def update_user_permissions(user_id: int, payload: UserPermissionsPayload):
         return permissions
     except pymysql.MySQLError as err:
         raise HTTPException(status_code=500, detail=f"Error updating user permissions: {err}")
-    finally:
-        cursor.close()
-
-@app.put("/forms/{form_id}", response_model=FormResponse)
-def update_form(form_id: int, form: FormCreate):
-    cursor = _get_cursor(dictionary=True)
-    try:
-        cursor.execute("SELECT id FROM forms WHERE id = %s AND user_id = %s", (form_id, form.user_id))
-        if not cursor.fetchone():
-            raise HTTPException(status_code=404, detail="Form not found")
-
-        funds_from = form.funds_from or []
-        positions_pay_into = form.positions_pay_into or []
-        positions_paid_from_sales = form.positions_paid_from_sales or []
-        positions_paid_from_tips = form.positions_paid_from_tips or []
-        tip_percentages = form.tip_percentages or {}
-        flat_rate_positions = form.flat_rate_positions or []
-
-        query = """
-            UPDATE forms
-            SET
-                name = %s,
-                start_date = %s,
-                end_date = %s,
-                start_time = %s,
-                end_time = %s,
-                order_calculation = %s,
-                tip_pool_type = %s,
-                funds_from = %s,
-                tip_division = %s,
-                positions_pay_into = %s,
-                positions_paid_from_sales = %s,
-                positions_paid_from_tips = %s,
-                tip_percentages = %s,
-                flat_rate_positions = %s,
-                flat_rate_amount = %s,
-                flat_rate_type = %s
-            WHERE id = %s AND user_id = %s
-        """
-        cursor.execute(query, (
-            form.name,
-            form.start_date,
-            form.end_date,
-            form.start_time,
-            form.end_time,
-            form.order_calculation,
-            form.tip_pool_type,
-            json.dumps(funds_from),
-            form.tip_division,
-            json.dumps(positions_pay_into),
-            json.dumps(positions_paid_from_sales),
-            json.dumps(positions_paid_from_tips),
-            json.dumps(tip_percentages),
-            json.dumps(flat_rate_positions),
-            form.flat_rate_amount,
-            form.flat_rate_type,
-            form_id,
-            form.user_id
-        ))
-        cursor.connection.commit()
-
-        cursor.execute("SELECT * FROM forms WHERE id = %s", (form_id,))
-        updated_form = cursor.fetchone()
-        return _deserialize_form(updated_form)
-    except pymysql.MySQLError as err:
-        raise HTTPException(status_code=500, detail=f"Error updating form: {err}")
-    finally:
-        cursor.close()
-
-@app.delete("/forms")
-def delete_forms(payload: FormsDeleteRequest):
-    if not payload.form_ids:
-        raise HTTPException(status_code=400, detail="No form IDs provided")
-
-    cursor = _get_cursor(dictionary=False)
-    try:
-        placeholders = ", ".join(["%s"] * len(payload.form_ids))
-        query = f"DELETE FROM forms WHERE user_id = %s AND id IN ({placeholders})"
-        cursor.execute(query, (payload.user_id, *payload.form_ids))
-        cursor.connection.commit()
-        return {"success": True, "deleted": cursor.rowcount}
-    except pymysql.MySQLError as err:
-        raise HTTPException(status_code=500, detail=f"Error deleting forms: {err}")
     finally:
         cursor.close()
 
