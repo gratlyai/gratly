@@ -99,6 +99,12 @@ class TeamInvitePayload(BaseModel):
     last_name: Optional[str] = None
     employee_guid: Optional[str] = None
 
+class EmployeeJobResponse(BaseModel):
+    employeeGuid: Optional[str] = None
+    firstName: Optional[str] = None
+    lastName: Optional[str] = None
+    jobTitle: Optional[str] = None
+
 def _send_sendgrid_email(to_email: str, subject: str, content: str, sender_name: Optional[str] = None):
     send_sendgrid_email(to_email=to_email, subject=subject, content=content, sender_name=sender_name)
 
@@ -165,6 +171,40 @@ def get_employees():
         return cursor.fetchall()
     except pymysql.MySQLError as err:
         raise HTTPException(status_code=500, detail=f"Error fetching employees: {err}")
+    finally:
+        cursor.close()
+
+@app.get("/employees/active-by-job", response_model=List[EmployeeJobResponse])
+def get_active_employees_by_job(restaurant_id: int):
+    cursor = _get_cursor(dictionary=True)
+    try:
+        cursor.execute(
+            """
+            SELECT
+                se.EMPLOYEEGUID AS employeeGuid,
+                se.EMPLOYEEFNAME AS firstName,
+                se.EMPLOYEELNAME AS lastName,
+                sj.JOBTITLE AS jobTitle
+            FROM GRATLYDB.SRC_EMPLOYEES se
+            JOIN GRATLYDB.SRC_EMPLOYEEROLE ser
+                ON ser.RESTAURANTGUID = se.RESTAURANTGUID
+                AND ser.EMPLOYEEGUID = se.EMPLOYEEGUID
+            JOIN GRATLYDB.SRC_JOBS sj
+                ON sj.JOBGUID = ser.JOBGUID
+                AND sj.RESTAURANTGUID = ser.RESTAURANTGUID
+            JOIN GRATLYDB.SRC_ONBOARDING so
+                ON so.RESTAURANTGUID = se.RESTAURANTGUID
+            WHERE so.RESTAURANTID = %s
+              AND se.DELETED = 0
+              AND sj.JOBTITLE IS NOT NULL
+              AND sj.JOBTITLE <> ''
+            ORDER BY sj.JOBTITLE, se.EMPLOYEEFNAME, se.EMPLOYEELNAME
+            """,
+            (restaurant_id,),
+        )
+        return cursor.fetchall()
+    except pymysql.MySQLError as err:
+        raise HTTPException(status_code=500, detail=f"Error fetching active employees: {err}")
     finally:
         cursor.close()
 

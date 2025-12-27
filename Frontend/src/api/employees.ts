@@ -10,6 +10,13 @@ export type Employee = {
   is_active: string;
 };
 
+export type EmployeeWithJob = {
+  employeeGuid: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  jobTitle: string | null;
+};
+
 export async function fetchEmployees(): Promise<Employee[]> {
   try {
     return await api.get<Employee[]>("/employees");
@@ -25,5 +32,16 @@ export async function fetchEmployee(employeeGuid: string): Promise<Employee | nu
   } catch (error) {
     console.warn("Failed to load employee:", error);
     return null;
+  }
+}
+
+export async function fetchActiveEmployeesByJobTitle(
+  restaurantId: number,
+): Promise<EmployeeWithJob[]> {
+  try {
+    return await api.get<EmployeeWithJob[]>(`/employees/active-by-job?restaurant_id=${restaurantId}`);
+  } catch (error) {
+    console.warn("Failed to load active employees by job:", error);
+    return [];
   }
 }

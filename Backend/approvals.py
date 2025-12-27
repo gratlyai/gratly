@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 import pymysql
+from pydantic import BaseModel
 
 try:
     from Backend.db import _get_cursor, _fetch_restaurant_guid, _fetch_restaurant_key
@@ -15,6 +16,34 @@ PAYOUT_RULE_LABELS = {
     "3": "Hour Based Payout",
     "4": "Job Weighted Payout",
 }
+
+class ApprovalOverrideItem(BaseModel):
+    employeeGuid: Optional[str] = None
+    employeeName: Optional[str] = None
+    jobTitle: Optional[str] = None
+    isContributor: Optional[str] = None
+    payoutReceiverId: Optional[str] = None
+    payoutPercentage: Optional[float] = None
+    totalSales: Optional[float] = None
+    netSales: Optional[float] = None
+    totalTips: Optional[float] = None
+    totalGratuity: Optional[float] = None
+    overallTips: Optional[float] = None
+    overallGratuity: Optional[float] = None
+    payoutTips: Optional[float] = None
+    payoutGratuity: Optional[float] = None
+    netPayout: Optional[float] = None
+
+class ApprovalOverridePayload(BaseModel):
+    restaurantId: int
+    payoutScheduleId: int
+    businessDate: str
+    items: List[ApprovalOverrideItem]
+
+class ApprovalFinalizePayload(BaseModel):
+    restaurantId: int
+    payoutScheduleId: int
+    businessDate: str
 
 def _get_contributor_column(cursor) -> Optional[str]:
     cursor.execute(
@@ -298,6 +327,7 @@ def get_approvals(
             )
 
         schedule_map: Dict[str, dict] = {}
+        schedule_contributors: Dict[str, Dict[str, dict]] = {}
         for row in rows:
             schedule_id = row["PAYOUT_SCHEDULEID"]
             business_date = row["BUSINESSDATE"]
@@ -332,9 +362,18 @@ def get_approvals(
             schedule_entry["netSales"] += float(row["NET_SALES"] or 0)
             schedule_entry["totalTips"] += float(row["TOTAL_TIPS"] or 0)
             schedule_entry["totalGratuity"] += float(row["TOTAL_GRATUITY"] or 0)
-
-            schedule_entry["contributors"].append(
-                {
+            contributor_key = "|".join(
+                [
+                    str(row["EMPLOYEEGUID"] or ""),
+                    str(row["JOBTITLE"] or ""),
+                    str(row["IS_CONTRIBUTOR"] or ""),
+                    str(row["PAYOUT_RECEIVERID"] or ""),
+                ]
+            )
+            schedule_contributors.setdefault(schedule_key, {})
+            existing = schedule_contributors[schedule_key].get(contributor_key)
+            if not existing:
+                schedule_contributors[schedule_key][contributor_key] = {
                     "employeeGuid": row["EMPLOYEEGUID"],
                     "employeeName": row["EMPLOYEE_NAME"],
                     "jobTitle": row["JOBTITLE"],
@@ -354,16 +393,283 @@ def get_approvals(
                     "payoutTips": float(row["PAYOUT_TIPS"] or 0),
                     "payoutGratuity": float(row["PAYOUT_GRATUITY"] or 0),
                 }
+            else:
+                existing["hoursWorked"] += float(row["HOURS_WORKED"] or 0)
+                existing["totalSales"] += float(row["TOTAL_SALES"] or 0)
+                existing["netSales"] += float(row["NET_SALES"] or 0)
+                existing["totalTips"] += float(row["TOTAL_TIPS"] or 0)
+                existing["totalGratuity"] += float(row["TOTAL_GRATUITY"] or 0)
+                existing["overallTips"] += float(row["OVERALL_TIPS"] or 0)
+                existing["overallGratuity"] += float(row["OVERALL_GRATUITY"] or 0)
+                existing["payoutTips"] += float(row["PAYOUT_TIPS"] or 0)
+                existing["payoutGratuity"] += float(row["PAYOUT_GRATUITY"] or 0)
+
+        overrides_map: Dict[str, list] = {}
+        approved_map: Dict[str, bool] = {}
+        schedule_keys = [
+            (item["payoutScheduleId"], item["businessDate"])
+            for item in schedule_map.values()
+            if item.get("businessDate")
+        ]
+        if schedule_keys:
+            schedule_ids_for_override = list({item[0] for item in schedule_keys})
+            business_dates_for_override = list({item[1] for item in schedule_keys})
+            cursor.execute(
+                f"""
+                SELECT
+                    PAYOUT_APPROVALID AS approval_id,
+                    PAYOUT_SCHEDULEID AS payout_schedule_id,
+                    BUSINESSDATE AS business_date,
+                    IS_APPROVED AS is_approved
+                FROM GRATLYDB.PAYOUT_APPROVAL
+                WHERE RESTAURANTID = %s
+                  AND PAYOUT_SCHEDULEID IN ({", ".join(["%s"] * len(schedule_ids_for_override))})
+                  AND BUSINESSDATE IN ({", ".join(["%s"] * len(business_dates_for_override))})
+                """,
+                (restaurant_id, *schedule_ids_for_override, *business_dates_for_override),
             )
+            approval_rows = cursor.fetchall()
+            approval_ids = []
+            for row in approval_rows:
+                key = f"{row['payout_schedule_id']}-{row['business_date']}"
+                approved_map[key] = bool(int(row["is_approved"] or 0))
+                approval_ids.append(row["approval_id"])
+
+            if approval_ids:
+                cursor.execute(
+                    f"""
+                    SELECT
+                        pa.PAYOUT_SCHEDULEID AS payout_schedule_id,
+                        pa.BUSINESSDATE AS business_date,
+                        pai.EMPLOYEEGUID AS employee_guid,
+                        pai.EMPLOYEE_NAME AS employee_name,
+                        pai.JOBTITLE AS job_title,
+                        pai.IS_CONTRIBUTOR AS is_contributor,
+                        pai.PAYOUT_RECEIVER_ID AS payout_receiver_id,
+                        pai.PAYOUT_PERCENTAGE AS payout_percentage,
+                        pai.TOTAL_SALES AS total_sales,
+                        pai.NET_SALES AS net_sales,
+                        pai.TOTAL_TIPS AS total_tips,
+                        pai.TOTAL_GRATUITY AS total_gratuity,
+                        pai.OVERALL_TIPS AS overall_tips,
+                        pai.OVERALL_GRATUITY AS overall_gratuity,
+                        pai.PAYOUT_TIPS AS payout_tips,
+                        pai.PAYOUT_GRATUITY AS payout_gratuity,
+                        pai.NET_PAYOUT AS net_payout
+                    FROM GRATLYDB.PAYOUT_APPROVAL_ITEMS pai
+                    JOIN GRATLYDB.PAYOUT_APPROVAL pa
+                        ON pa.PAYOUT_APPROVALID = pai.PAYOUT_APPROVALID
+                    WHERE pai.PAYOUT_APPROVALID IN ({", ".join(["%s"] * len(approval_ids))})
+                    """,
+                    tuple(approval_ids),
+                )
+                for row in cursor.fetchall():
+                    key = f"{row['payout_schedule_id']}-{row['business_date']}"
+                    overrides_map.setdefault(key, []).append(row)
 
         for schedule in schedule_map.values():
-            schedule["totalSales"] = round(schedule["totalSales"], 2)
-            schedule["netSales"] = round(schedule["netSales"], 2)
-            schedule["totalTips"] = round(schedule["totalTips"], 2)
-            schedule["totalGratuity"] = round(schedule["totalGratuity"], 2)
+            schedule_key = f"{schedule['payoutScheduleId']}-{schedule['businessDate']}"
+            schedule["isApproved"] = approved_map.get(schedule_key, False)
+            if schedule_key in overrides_map:
+                items = overrides_map[schedule_key]
+                schedule["contributors"] = [
+                    {
+                        "employeeGuid": item["employee_guid"],
+                        "employeeName": item["employee_name"],
+                        "jobTitle": item["job_title"],
+                        "businessDate": schedule["businessDate"],
+                        "inTime": None,
+                        "outTime": None,
+                        "hoursWorked": 0,
+                        "isContributor": item["is_contributor"],
+                        "payoutReceiverId": item["payout_receiver_id"],
+                        "payoutPercentage": float(item["payout_percentage"] or 0),
+                        "totalSales": float(item["total_sales"] or 0),
+                        "netSales": float(item["net_sales"] or 0),
+                        "totalTips": float(item["total_tips"] or 0),
+                        "totalGratuity": float(item["total_gratuity"] or 0),
+                        "overallTips": float(item["overall_tips"] or 0),
+                        "overallGratuity": float(item["overall_gratuity"] or 0),
+                        "payoutTips": float(item["payout_tips"] or 0),
+                        "payoutGratuity": float(item["payout_gratuity"] or 0),
+                    }
+                    for item in items
+                ]
+                schedule["totalSales"] = round(sum(item["total_sales"] or 0 for item in items), 2)
+                schedule["netSales"] = round(sum(item["net_sales"] or 0 for item in items), 2)
+                schedule["totalTips"] = round(sum(item["total_tips"] or 0 for item in items), 2)
+                schedule["totalGratuity"] = round(sum(item["total_gratuity"] or 0 for item in items), 2)
+                schedule["contributorCount"] = sum(
+                    1 for item in items if (item["is_contributor"] or "").lower() == "yes"
+                )
+                schedule["receiverCount"] = sum(
+                    1 for item in items if (item["is_contributor"] or "").lower() == "no"
+                )
+            else:
+                schedule["totalSales"] = round(schedule["totalSales"], 2)
+                schedule["netSales"] = round(schedule["netSales"], 2)
+                schedule["totalTips"] = round(schedule["totalTips"], 2)
+                schedule["totalGratuity"] = round(schedule["totalGratuity"], 2)
+                schedule["contributors"] = list(
+                    schedule_contributors.get(schedule_key, {}).values()
+                )
 
-        return {"schedules": list(schedule_map.values())}
+        schedules = list(schedule_map.values())
+        schedules = [schedule for schedule in schedules if not schedule.get("isApproved")]
+        return {"schedules": schedules}
     except pymysql.MySQLError as err:
         raise HTTPException(status_code=500, detail=f"Error fetching approvals data: {err}")
+    finally:
+        cursor.close()
+
+@router.post("/approvals/approve")
+def approve_payout_schedule(payload: ApprovalFinalizePayload):
+    cursor = _get_cursor(dictionary=True)
+    conn = cursor.connection
+    try:
+        cursor.execute(
+            """
+            SELECT PAYOUT_APPROVALID AS approval_id, IS_APPROVED AS is_approved
+            FROM GRATLYDB.PAYOUT_APPROVAL
+            WHERE RESTAURANTID = %s
+              AND PAYOUT_SCHEDULEID = %s
+              AND BUSINESSDATE = %s
+            LIMIT 1
+            """,
+            (payload.restaurantId, payload.payoutScheduleId, payload.businessDate),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Approval record not found")
+        if int(row.get("is_approved") or 0) == 1:
+            return {"success": True, "approval_id": row["approval_id"], "is_approved": True}
+
+        cursor.execute(
+            """
+            UPDATE GRATLYDB.PAYOUT_APPROVAL
+            SET IS_APPROVED = 1
+            WHERE PAYOUT_APPROVALID = %s
+            """,
+            (row["approval_id"],),
+        )
+        conn.commit()
+        return {"success": True, "approval_id": row["approval_id"], "is_approved": True}
+    except pymysql.MySQLError as err:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error approving payout: {err}")
+    finally:
+        cursor.close()
+
+@router.post("/approvals/overrides")
+def save_approval_overrides(payload: ApprovalOverridePayload):
+    cursor = _get_cursor(dictionary=True)
+    conn = cursor.connection
+    try:
+        cursor.execute(
+            """
+            SELECT PAYOUT_APPROVALID AS approval_id, IS_APPROVED AS is_approved
+            FROM GRATLYDB.PAYOUT_APPROVAL
+            WHERE RESTAURANTID = %s
+              AND PAYOUT_SCHEDULEID = %s
+              AND BUSINESSDATE = %s
+            LIMIT 1
+            """,
+            (payload.restaurantId, payload.payoutScheduleId, payload.businessDate),
+        )
+        row = cursor.fetchone()
+        approval_id = None
+        if row:
+            if int(row.get("is_approved") or 0) == 1:
+                raise HTTPException(status_code=400, detail="Payout schedule already approved")
+            approval_id = row["approval_id"]
+            cursor.execute(
+                """
+                UPDATE GRATLYDB.PAYOUT_APPROVAL
+                SET IS_APPROVED = 0
+                WHERE PAYOUT_APPROVALID = %s
+                """,
+                (approval_id,),
+            )
+        else:
+            cursor.execute(
+                """
+                INSERT INTO GRATLYDB.PAYOUT_APPROVAL (
+                    RESTAURANTID,
+                    PAYOUT_SCHEDULEID,
+                    BUSINESSDATE,
+                    IS_APPROVED
+                )
+                VALUES (%s, %s, %s, 0)
+                """,
+                (payload.restaurantId, payload.payoutScheduleId, payload.businessDate),
+            )
+            approval_id = cursor.lastrowid
+
+        cursor.execute(
+            """
+            DELETE FROM GRATLYDB.PAYOUT_APPROVAL_ITEMS
+            WHERE PAYOUT_APPROVALID = %s
+            """,
+            (approval_id,),
+        )
+
+        if payload.items:
+            rows = [
+                (
+                    approval_id,
+                    payload.restaurantId,
+                    payload.payoutScheduleId,
+                    payload.businessDate,
+                    item.employeeGuid,
+                    item.employeeName,
+                    item.jobTitle,
+                    item.isContributor,
+                    item.payoutReceiverId,
+                    item.payoutPercentage,
+                    item.totalSales,
+                    item.netSales,
+                    item.totalTips,
+                    item.totalGratuity,
+                    item.overallTips,
+                    item.overallGratuity,
+                    item.payoutTips,
+                    item.payoutGratuity,
+                    item.netPayout,
+                )
+                for item in payload.items
+            ]
+            cursor.executemany(
+                """
+                INSERT INTO GRATLYDB.PAYOUT_APPROVAL_ITEMS (
+                    PAYOUT_APPROVALID,
+                    RESTAURANTID,
+                    PAYOUT_SCHEDULEID,
+                    BUSINESSDATE,
+                    EMPLOYEEGUID,
+                    EMPLOYEE_NAME,
+                    JOBTITLE,
+                    IS_CONTRIBUTOR,
+                    PAYOUT_RECEIVER_ID,
+                    PAYOUT_PERCENTAGE,
+                    TOTAL_SALES,
+                    NET_SALES,
+                    TOTAL_TIPS,
+                    TOTAL_GRATUITY,
+                    OVERALL_TIPS,
+                    OVERALL_GRATUITY,
+                    PAYOUT_TIPS,
+                    PAYOUT_GRATUITY,
+                    NET_PAYOUT
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                rows,
+            )
+
+        conn.commit()
+        return {"success": True, "approval_id": approval_id}
+    except pymysql.MySQLError as err:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error saving approval overrides: {err}")
     finally:
         cursor.close()
