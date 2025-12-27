@@ -83,13 +83,13 @@ def normalize_business_date(date_value):
 # Get all parameters for dates to be passed in APIs
 
 start_date_time = datetime.combine(date.today(), time(0, 0, 1))  # 00:00:01
-# start_date = convert_pacific_utc(start_date_time.strftime('%Y-%m-%d %H:%M:%S'))
-start_date = convert_pacific_utc('2025-12-17 00:00:01')
+start_date = convert_pacific_utc(start_date_time.strftime('%Y-%m-%d %H:%M:%S'))
+#start_date = convert_pacific_utc('2025-12-25 00:00:01')
 end_datetime = datetime.combine(date.today(), time(23, 59, 59))
-# end_date = convert_pacific_utc(end_datetime.strftime('%Y-%m-%d %H:%M:%S'))
-end_date = convert_pacific_utc('2025-12-17 23:59:59')
-business_date = '20251217'
-# business_date = date.today().strftime('%Y%m%d')
+end_date = convert_pacific_utc(end_datetime.strftime('%Y-%m-%d %H:%M:%S'))
+#end_date = convert_pacific_utc('2025-12-25 23:59:59')
+#business_date = '20251225'
+business_date = date.today().strftime('%Y%m%d')
 print(start_date,end_date,business_date)
 
 def main():

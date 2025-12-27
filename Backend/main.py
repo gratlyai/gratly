@@ -20,6 +20,7 @@ try:
     )
     from Backend.payout_schedules import router as payout_schedules_router
     from Backend.password_reset import router as password_reset_router
+    from Backend.approvals import router as approvals_router
 except ImportError:
     from db import (
         _get_cursor,
@@ -34,6 +35,7 @@ except ImportError:
     )
     from payout_schedules import router as payout_schedules_router
     from password_reset import router as password_reset_router
+    from approvals import router as approvals_router
     from security import hash_password, verify_password
     from email_utils import send_sendgrid_email
 
@@ -55,6 +57,7 @@ app.add_middleware(
 
 app.include_router(payout_schedules_router)
 app.include_router(password_reset_router)
+app.include_router(approvals_router)
 
 print("DB HOST:", _get_env_or_ini("DB_HOST"))
 print("DB USER:", _get_env_or_ini("DB_USER"))
