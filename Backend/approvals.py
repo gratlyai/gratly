@@ -44,6 +44,7 @@ class ApprovalFinalizePayload(BaseModel):
     restaurantId: int
     payoutScheduleId: int
     businessDate: str
+    userId: int
 
 def _get_contributor_column(cursor) -> Optional[str]:
     cursor.execute(
@@ -159,7 +160,7 @@ def get_approvals(
                 GROUP BY PS.PAYOUT_SCHEDULEID
             ),
             GETPAYOUT_EMPLOYEES_DATA AS (
-                SELECT DISTINCT
+                SELECT
                     GPS.PAYOUT_SCHEDULEID,
                     GPS.RESTAURANTID,
                     GPS.payout_schedule_name,
@@ -182,10 +183,26 @@ def get_approvals(
                     SJ.JOBTITLE,
                     PR.PAYOUT_RECEIVERID,
                     PR.PAYOUT_PERCENTAGE,
-                    DATE_FORMAT(ST.INDATE, '%%l:%%i %%p') AS INDATE,
-                    DATE_FORMAT(ST.OUTDATE, '%%l:%%i %%p') AS OUTDATE,
+                    DATE_FORMAT(
+                        MIN(
+                            STR_TO_DATE(
+                                SUBSTRING(REPLACE(ST.INDATE, 'T', ' '), 1, 19),
+                                '%%Y-%%m-%%d %%H:%%i:%%s'
+                            )
+                        ),
+                        '%%l:%%i %%p'
+                    ) AS INDATE,
+                    DATE_FORMAT(
+                        MAX(
+                            STR_TO_DATE(
+                                SUBSTRING(REPLACE(ST.OUTDATE, 'T', ' '), 1, 19),
+                                '%%Y-%%m-%%d %%H:%%i:%%s'
+                            )
+                        ),
+                        '%%l:%%i %%p'
+                    ) AS OUTDATE,
                     CASE WHEN PRC.PAYOUT_RECEIVERID IS NOT NULL THEN 'Yes' ELSE 'No' END AS IS_CONTRIBUTOR,
-                    (ST.REGULARHOURS + ST.OVERTIMEHOURS) AS HOURS_WORKED
+                    SUM(ST.REGULARHOURS + ST.OVERTIMEHOURS) AS HOURS_WORKED
                 FROM GRATLYDB.SRC_TIMEENTRIES ST
                 JOIN GRATLYDB.SRC_ONBOARDING SO
                     ON SO.RESTAURANTGUID = ST.RESTAURANTGUID
@@ -198,10 +215,23 @@ def get_approvals(
                     FIELD(LEFT(GPS.START_DAY, 3), 'Mon','Tue','Wed','Thu','Fri','Sat','Sun')
                     AND
                     FIELD(LEFT(GPS.END_DAY, 3), 'Mon','Tue','Wed','Thu','Fri','Sat','Sun')
-                    AND ST.INDATE BETWEEN
-                        CAST(TIMESTAMP(STR_TO_DATE(REPLACE(ST.BUSINESSDATE, '-', ''), '%%Y%%m%%d'), GPS.START_TIME) AS DATETIME(6))
+                    AND STR_TO_DATE(
+                        SUBSTRING(REPLACE(ST.INDATE, 'T', ' '), 1, 19),
+                        '%%Y-%%m-%%d %%H:%%i:%%s'
+                    ) BETWEEN
+                        CAST(
+                            TIMESTAMP(
+                                STR_TO_DATE(REPLACE(ST.BUSINESSDATE, '-', ''), '%%Y%%m%%d'),
+                                GPS.START_TIME
+                            ) AS DATETIME(6)
+                        )
                         AND
-                        CAST(TIMESTAMP(STR_TO_DATE(REPLACE(ST.BUSINESSDATE, '-', ''), '%%Y%%m%%d'), GPS.END_TIME) AS DATETIME(6))
+                        CAST(
+                            TIMESTAMP(
+                                STR_TO_DATE(REPLACE(ST.BUSINESSDATE, '-', ''), '%%Y%%m%%d'),
+                                GPS.END_TIME
+                            ) AS DATETIME(6)
+                        )
                 JOIN GRATLYDB.SRC_EMPLOYEES SE
                     ON SE.EMPLOYEEGUID = ST.EMPLOYEEGUID
                 JOIN GRATLYDB.SRC_JOBS SJ
@@ -213,6 +243,25 @@ def get_approvals(
                     ON PRC.PAYOUT_SCHEDULEID = GPS.PAYOUT_SCHEDULEID
                     AND PRC.PAYOUT_RECEIVERID = SJ.JOBTITLE
                     AND PRC.{contributor_column} = %s
+                GROUP BY
+                    GPS.PAYOUT_SCHEDULEID,
+                    GPS.RESTAURANTID,
+                    GPS.payout_schedule_name,
+                    GPS.START_DAY,
+                    GPS.END_DAY,
+                    GPS.START_TIME,
+                    GPS.END_TIME,
+                    GPS.PAYOUT_RULE_ID,
+                    GPS.PREPAYOUT_FLAG,
+                    ST.BUSINESSDATE,
+                    ST.RESTAURANTGUID,
+                    ST.EMPLOYEEGUID,
+                    EMPLOYEE_NAME,
+                    ST.JOBID,
+                    SJ.JOBTITLE,
+                    PR.PAYOUT_RECEIVERID,
+                    PR.PAYOUT_PERCENTAGE,
+                    PRC.PAYOUT_RECEIVERID
             ),
             GET_ALL_SALES AS (
                 SELECT
@@ -224,14 +273,20 @@ def get_approvals(
                         + SUM(COALESCE(SAO.GRATUITYAMOUNT, 0))
                     ) AS NET_SALES,
                     SUM(COALESCE(SAO.TIPAMOUNT, 0)) AS TOTAL_TIPS,
-                    SUM(COALESCE(SAO.GRATUITYAMOUNT, 0)) AS TOTAL_GRATUITY
+                    SUM(COALESCE(SAO.GRATUITYAMOUNT, 0)) AS TOTAL_GRATUITY,
+                    COUNT(DISTINCT SAO.ORDERGUID) AS ORDER_COUNT
                 FROM GETPAYOUT_EMPLOYEES_DATA GED
                 LEFT JOIN GRATLYDB.SRC_ALLORDERS SAO
                     ON SAO.RESTAURANTGUID = GED.RESTAURANTGUID
                     AND SAO.EMPLOYEEGUID = GED.EMPLOYEEGUID
-                    AND STR_TO_DATE(REPLACE(SAO.BUSINESSDATE, '-', ''), '%%Y%%m%%d')
-                        = STR_TO_DATE(REPLACE(GED.BUSINESSDATE, '-', ''), '%%Y%%m%%d')
-                    AND SAO.OPENEDDATE BETWEEN GED.START_DATETIME AND GED.END_DATETIME
+                    AND (
+                        SAO.VOIDED IS NULL
+                        OR SAO.VOIDED <> '1'
+                    )
+                    AND STR_TO_DATE(
+                        SUBSTRING(REPLACE(SAO.OPENEDDATE, 'T', ' '), 1, 19),
+                        '%%Y-%%m-%%d %%H:%%i:%%s'
+                    ) BETWEEN GED.START_DATETIME AND GED.END_DATETIME
                 GROUP BY
                     GED.PAYOUT_SCHEDULEID,
                     GED.RESTAURANTID,
@@ -346,11 +401,13 @@ def get_approvals(
                     "endTime": row["END_TIME"],
                     "startDateTime": row["START_DATETIME"],
                     "endDateTime": row["END_DATETIME"],
+                    "restaurantGuid": row["RESTAURANTGUID"],
                     "prepayoutFlag": bool(row["PREPAYOUT_FLAG"]),
                     "totalSales": 0.0,
                     "netSales": 0.0,
                     "totalTips": 0.0,
                     "totalGratuity": 0.0,
+                    "orderCount": 0,
                     "contributorCount": schedule_counts.get(schedule_id, {}).get("contributorCount", 0),
                     "receiverCount": schedule_counts.get(schedule_id, {}).get("receiverCount", 0),
                     "receiverRoles": receiver_roles.get(schedule_id, []),
@@ -362,6 +419,7 @@ def get_approvals(
             schedule_entry["netSales"] += float(row["NET_SALES"] or 0)
             schedule_entry["totalTips"] += float(row["TOTAL_TIPS"] or 0)
             schedule_entry["totalGratuity"] += float(row["TOTAL_GRATUITY"] or 0)
+            schedule_entry["orderCount"] += int(row["ORDER_COUNT"] or 0)
             contributor_key = "|".join(
                 [
                     str(row["EMPLOYEEGUID"] or ""),
@@ -392,6 +450,7 @@ def get_approvals(
                     "overallGratuity": float(row["OVERALL_GRATUITY"] or 0),
                     "payoutTips": float(row["PAYOUT_TIPS"] or 0),
                     "payoutGratuity": float(row["PAYOUT_GRATUITY"] or 0),
+                    "orderCount": int(row["ORDER_COUNT"] or 0),
                 }
             else:
                 existing["hoursWorked"] += float(row["HOURS_WORKED"] or 0)
@@ -403,6 +462,108 @@ def get_approvals(
                 existing["overallGratuity"] += float(row["OVERALL_GRATUITY"] or 0)
                 existing["payoutTips"] += float(row["PAYOUT_TIPS"] or 0)
                 existing["payoutGratuity"] += float(row["PAYOUT_GRATUITY"] or 0)
+                existing["orderCount"] += int(row["ORDER_COUNT"] or 0)
+
+        for schedule_key, schedule in schedule_map.items():
+            contributors = schedule_contributors.get(schedule_key, {})
+            if not contributors:
+                continue
+            restaurant_guid = schedule.get("restaurantGuid")
+            business_date = schedule.get("businessDate")
+            start_time = schedule.get("startTime")
+            end_time = schedule.get("endTime")
+            if not restaurant_guid or not business_date or not start_time or not end_time:
+                continue
+            employee_guids = [
+                entry["employeeGuid"]
+                for entry in contributors.values()
+                if entry.get("employeeGuid")
+            ]
+            if not employee_guids:
+                continue
+            placeholders = ", ".join(["%s"] * len(employee_guids))
+            cursor.execute(
+                f"""
+                SELECT
+                    EMPLOYEEGUID AS employee_guid,
+                    COUNT(*) AS order_count
+                FROM GRATLYDB.SRC_ALLORDERS
+                WHERE RESTAURANTGUID = %s
+                  AND EMPLOYEEGUID IN ({placeholders})
+                  AND (VOIDED IS NULL OR VOIDED <> '1')
+                  AND STR_TO_DATE(
+                        SUBSTRING(REPLACE(OPENEDDATE, 'T', ' '), 1, 19),
+                        '%%Y-%%m-%%d %%H:%%i:%%s'
+                      )
+                      BETWEEN CAST(
+                          TIMESTAMP(
+                              STR_TO_DATE(REPLACE(%s, '-', ''), '%%Y%%m%%d'),
+                              %s
+                          ) AS DATETIME(6)
+                      )
+                      AND CAST(
+                          TIMESTAMP(
+                              STR_TO_DATE(REPLACE(%s, '-', ''), '%%Y%%m%%d'),
+                              %s
+                          ) AS DATETIME(6)
+                      )
+                GROUP BY EMPLOYEEGUID
+                """,
+                (
+                    restaurant_guid,
+                    *employee_guids,
+                    business_date,
+                    start_time,
+                    business_date,
+                    end_time,
+                ),
+            )
+            order_map = {row["employee_guid"]: int(row["order_count"] or 0) for row in cursor.fetchall()}
+            for entry in contributors.values():
+                employee_guid = entry.get("employeeGuid")
+                if employee_guid:
+                    entry["orderCount"] = order_map.get(employee_guid, 0)
+
+            cursor.execute(
+                f"""
+                SELECT
+                    EMPLOYEEGUID AS employee_guid,
+                    SUM(REGULARHOURS + OVERTIMEHOURS) AS hours_worked
+                FROM GRATLYDB.SRC_TIMEENTRIES
+                WHERE RESTAURANTGUID = %s
+                  AND EMPLOYEEGUID IN ({placeholders})
+                  AND STR_TO_DATE(
+                        SUBSTRING(REPLACE(INDATE, 'T', ' '), 1, 19),
+                        '%%Y-%%m-%%d %%H:%%i:%%s'
+                      )
+                      BETWEEN CAST(
+                          TIMESTAMP(
+                              STR_TO_DATE(REPLACE(%s, '-', ''), '%%Y%%m%%d'),
+                              %s
+                          ) AS DATETIME(6)
+                      )
+                      AND CAST(
+                          TIMESTAMP(
+                              STR_TO_DATE(REPLACE(%s, '-', ''), '%%Y%%m%%d'),
+                              %s
+                          ) AS DATETIME(6)
+                      )
+                GROUP BY EMPLOYEEGUID
+                """,
+                (
+                    restaurant_guid,
+                    *employee_guids,
+                    business_date,
+                    start_time,
+                    business_date,
+                    end_time,
+                ),
+            )
+            hours_map = {row["employee_guid"]: float(row["hours_worked"] or 0) for row in cursor.fetchall()}
+            for entry in contributors.values():
+                employee_guid = entry.get("employeeGuid")
+                if employee_guid:
+                    entry["hoursWorked"] = hours_map.get(employee_guid, 0)
 
         overrides_map: Dict[str, list] = {}
         approved_map: Dict[str, bool] = {}
@@ -472,15 +633,68 @@ def get_approvals(
             schedule["isApproved"] = approved_map.get(schedule_key, False)
             if schedule_key in overrides_map:
                 items = overrides_map[schedule_key]
+                contributor_lookup = schedule_contributors.get(schedule_key, {})
                 schedule["contributors"] = [
                     {
                         "employeeGuid": item["employee_guid"],
                         "employeeName": item["employee_name"],
                         "jobTitle": item["job_title"],
                         "businessDate": schedule["businessDate"],
-                        "inTime": None,
-                        "outTime": None,
-                        "hoursWorked": 0,
+                        "inTime": contributor_lookup.get(
+                            "|".join(
+                                [
+                                    str(item["employee_guid"] or ""),
+                                    str(item["job_title"] or ""),
+                                    str(item["is_contributor"] or ""),
+                                    str(item["payout_receiver_id"] or ""),
+                                ]
+                            ),
+                            {},
+                        ).get("inTime"),
+                        "outTime": contributor_lookup.get(
+                            "|".join(
+                                [
+                                    str(item["employee_guid"] or ""),
+                                    str(item["job_title"] or ""),
+                                    str(item["is_contributor"] or ""),
+                                    str(item["payout_receiver_id"] or ""),
+                                ]
+                            ),
+                            {},
+                        ).get("outTime"),
+                        "hoursWorked": contributor_lookup.get(
+                            "|".join(
+                                [
+                                    str(item["employee_guid"] or ""),
+                                    str(item["job_title"] or ""),
+                                    str(item["is_contributor"] or ""),
+                                    str(item["payout_receiver_id"] or ""),
+                                ]
+                            ),
+                            {},
+                        ).get("hoursWorked", 0),
+                        "orderCount": contributor_lookup.get(
+                            "|".join(
+                                [
+                                    str(item["employee_guid"] or ""),
+                                    str(item["job_title"] or ""),
+                                    str(item["is_contributor"] or ""),
+                                    str(item["payout_receiver_id"] or ""),
+                                ]
+                            ),
+                            {},
+                        ).get("orderCount", 0),
+                        "orderCount": contributor_lookup.get(
+                            "|".join(
+                                [
+                                    str(item["employee_guid"] or ""),
+                                    str(item["job_title"] or ""),
+                                    str(item["is_contributor"] or ""),
+                                    str(item["payout_receiver_id"] or ""),
+                                ]
+                            ),
+                            {},
+                        ).get("orderCount", 0),
                         "isContributor": item["is_contributor"],
                         "payoutReceiverId": item["payout_receiver_id"],
                         "payoutPercentage": float(item["payout_percentage"] or 0),
@@ -551,6 +765,56 @@ def approve_payout_schedule(payload: ApprovalFinalizePayload):
             WHERE PAYOUT_APPROVALID = %s
             """,
             (row["approval_id"],),
+        )
+        cursor.execute(
+            """
+            INSERT INTO GRATLYDB.PAYOUT_FINAL (
+                PAYOUT_APPROVALID,
+                RESTAURANTID,
+                PAYOUT_SCHEDULEID,
+                BUSINESSDATE,
+                EMPLOYEEGUID,
+                EMPLOYEE_NAME,
+                JOBTITLE,
+                IS_CONTRIBUTOR,
+                PAYOUT_RECEIVER_ID,
+                PAYOUT_PERCENTAGE,
+                TOTAL_SALES,
+                NET_SALES,
+                TOTAL_TIPS,
+                TOTAL_GRATUITY,
+                OVERALL_TIPS,
+                OVERALL_GRATUITY,
+                PAYOUT_TIPS,
+                PAYOUT_GRATUITY,
+                NET_PAYOUT,
+                APPROVED_USERID
+            )
+            SELECT
+                PAYOUT_APPROVALID,
+                RESTAURANTID,
+                PAYOUT_SCHEDULEID,
+                BUSINESSDATE,
+                EMPLOYEEGUID,
+                EMPLOYEE_NAME,
+                JOBTITLE,
+                IS_CONTRIBUTOR,
+                PAYOUT_RECEIVER_ID,
+                PAYOUT_PERCENTAGE,
+                TOTAL_SALES,
+                NET_SALES,
+                TOTAL_TIPS,
+                TOTAL_GRATUITY,
+                OVERALL_TIPS,
+                OVERALL_GRATUITY,
+                PAYOUT_TIPS,
+                PAYOUT_GRATUITY,
+                NET_PAYOUT,
+                %s
+            FROM GRATLYDB.PAYOUT_APPROVAL_ITEMS
+            WHERE PAYOUT_APPROVALID = %s
+            """,
+            (payload.userId, row["approval_id"]),
         )
         conn.commit()
         return {"success": True, "approval_id": row["approval_id"], "is_approved": True}

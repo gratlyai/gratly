@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   approvePayoutSchedule,
   fetchApprovals,
@@ -6,6 +6,15 @@ import {
   type ApprovalScheduleWithContributors,
 } from "../api/approvals";
 import { fetchActiveEmployeesByJobTitle, type EmployeeWithJob } from "../api/employees";
+import { fetchJobTitles } from "../api/jobs";
+
+type CustomReceiverEntry = {
+  id: string;
+  employeeGuid: string | null;
+  employeeName: string;
+  jobTitle: string;
+  payoutPercentage: string;
+};
 
 const formatValue = (value: string | null | undefined) => (value ? value : "N/A");
 
@@ -38,8 +47,10 @@ const sortSchedulesByDate = (items: ApprovalScheduleWithContributors[]) =>
 
 export default function Reconciliation() {
   const [restaurantId, setRestaurantId] = useState<number | null>(null);
+  const [userId, setUserId] = useState<number | null>(null);
   const [schedules, setSchedules] = useState<ApprovalScheduleWithContributors[]>([]);
-  const [activeScheduleKey, setActiveScheduleKey] = useState<string | null>(null);
+  const [expandedScheduleKeys, setExpandedScheduleKeys] = useState<Set<string>>(new Set());
+  const scheduleRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [expandedEmployees, setExpandedEmployees] = useState<Record<string, boolean>>({});
   const [editingScheduleKey, setEditingScheduleKey] = useState<string | null>(null);
   const [resetToken, setResetToken] = useState(0);
@@ -52,6 +63,9 @@ export default function Reconciliation() {
   const [payoutEdits, setPayoutEdits] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [approvedScheduleKeys, setApprovedScheduleKeys] = useState<Set<string>>(new Set());
+  const [jobTitles, setJobTitles] = useState<string[]>([]);
+  const [customReceivers, setCustomReceivers] = useState<Record<string, CustomReceiverEntry[]>>({});
+  const [customReceiverDropdowns, setCustomReceiverDropdowns] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     const storedRestaurantId = localStorage.getItem("restaurantKey");
@@ -59,6 +73,16 @@ export default function Reconciliation() {
       const parsedId = Number(storedRestaurantId);
       if (Number.isFinite(parsedId)) {
         setRestaurantId(parsedId);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const storedUserId = localStorage.getItem("userId");
+    if (storedUserId) {
+      const parsedId = Number(storedUserId);
+      if (Number.isFinite(parsedId)) {
+        setUserId(parsedId);
       }
     }
   }, []);
@@ -76,7 +100,7 @@ export default function Reconciliation() {
         if (isMounted) {
           const sortedSchedules = sortSchedulesByDate(data.schedules);
           setSchedules(sortedSchedules);
-          setActiveScheduleKey(null);
+          setExpandedScheduleKeys(new Set());
           setEditingScheduleKey(null);
           setApprovedScheduleKeys(
             new Set(
@@ -100,10 +124,15 @@ export default function Reconciliation() {
   useEffect(() => {
     const handleClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target && target.closest('[data-add-member-dropdown="true"]')) {
+      if (
+        target &&
+        (target.closest('[data-add-member-dropdown="true"]') ||
+          target.closest('[data-custom-receiver-dropdown="true"]'))
+      ) {
         return;
       }
       setAddMemberDropdowns({});
+      setCustomReceiverDropdowns({});
     };
     document.addEventListener("click", handleClick);
     return () => {
@@ -119,6 +148,53 @@ export default function Reconciliation() {
 
   const roundCurrency = (value: number) => Math.round(value * 100) / 100;
 
+  const isManualReceiver = (receiver: ApprovalContributor) =>
+    (receiver.isContributor || "").toLowerCase() === "no" &&
+    Number(receiver.payoutPercentage || 0) > 0 &&
+    Number(receiver.totalTips || 0) === 0 &&
+    Number(receiver.totalGratuity || 0) === 0 &&
+    receiver.inTime === null &&
+    receiver.outTime === null;
+
+  const addCustomReceiver = (scheduleKey: string) => {
+    setCustomReceivers((current) => {
+      const existing = current[scheduleKey] ?? [];
+      return {
+        ...current,
+        [scheduleKey]: [
+          ...existing,
+          {
+            id: `custom-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            employeeGuid: null,
+            employeeName: "",
+            jobTitle: "",
+            payoutPercentage: "",
+          },
+        ],
+      };
+    });
+  };
+
+  const updateCustomReceiver = (
+    scheduleKey: string,
+    entryId: string,
+    updates: Partial<CustomReceiverEntry>,
+  ) => {
+    setCustomReceivers((current) => ({
+      ...current,
+      [scheduleKey]: (current[scheduleKey] ?? []).map((entry) =>
+        entry.id === entryId ? { ...entry, ...updates } : entry,
+      ),
+    }));
+  };
+
+  const removeCustomReceiver = (scheduleKey: string, entryId: string) => {
+    setCustomReceivers((current) => ({
+      ...current,
+      [scheduleKey]: (current[scheduleKey] ?? []).filter((entry) => entry.id !== entryId),
+    }));
+  };
+
   const getOverallBase = (schedule: ApprovalScheduleWithContributors) => {
     const match = schedule.contributors.find(
       (contributor) => contributor.overallTips || contributor.overallGratuity,
@@ -129,6 +205,9 @@ export default function Reconciliation() {
     };
   };
 
+  const normalizeRoleKey = (value: string | null | undefined) =>
+    (value || "").trim().toLowerCase();
+
   const buildApprovalItems = (schedule: ApprovalScheduleWithContributors) => {
     const receivers = schedule.contributors.filter(
       (contributor) => (contributor.isContributor || "").toLowerCase() === "no",
@@ -136,29 +215,49 @@ export default function Reconciliation() {
     const contributors = schedule.contributors.filter(
       (contributor) => (contributor.isContributor || "").toLowerCase() === "yes",
     );
+    const scheduleKey = `${schedule.payoutScheduleId}-${schedule.businessDate}`;
+    const receiverRolePercentages = schedule.receiverRoles.reduce((acc, role) => {
+      const roleKey = normalizeRoleKey(role.receiverId);
+      acc[roleKey] = Number(role.payoutPercentage || 0);
+      return acc;
+    }, {} as Record<string, number>);
+    const receiverRoleCounts = receivers.reduce((acc, receiver) => {
+      if (isManualReceiver(receiver)) {
+        return acc;
+      }
+      const roleKey = normalizeRoleKey(receiver.jobTitle ?? receiver.payoutReceiverId);
+      acc[roleKey] = (acc[roleKey] ?? 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
     const eligibleContributors = contributors.filter((contributor) => {
       const tipTotal =
         Number(contributor.totalTips || 0) + Number(contributor.totalGratuity || 0);
       return tipTotal > 0;
     });
-    const totalReceiverTips = receivers.reduce((total, receiver) => total + receiver.payoutTips, 0);
-    const totalReceiverGratuity = receivers.reduce(
-      (total, receiver) => total + receiver.payoutGratuity,
-      0,
-    );
-    const contributorTipsShare =
-      eligibleContributors.length > 0 ? -(totalReceiverTips / eligibleContributors.length) : 0;
-    const contributorGratuityShare =
-      eligibleContributors.length > 0
-        ? -(totalReceiverGratuity / eligibleContributors.length)
-        : 0;
+    const totalReceiverPercentage = getReceiverPercentSum(schedule);
+    const { overallTips, overallGratuity } = getOverallBase(schedule);
 
     return schedule.contributors.map((item) => {
       const isContributor = (item.isContributor || "").toLowerCase() === "yes";
+      const receiverRoleKey = normalizeRoleKey(item.jobTitle ?? item.payoutReceiverId);
+      const receiverRoleCount = receiverRoleCounts[receiverRoleKey] ?? 0;
+      const rolePercentageTotal = receiverRolePercentages[receiverRoleKey] ?? 0;
+      const receiverSharePercentage =
+        !isContributor && receiverRoleCount > 0
+          ? rolePercentageTotal / receiverRoleCount
+          : 0;
+      const receiverPayoutPercentage = isManualReceiver(item)
+        ? Number(item.payoutPercentage || 0)
+        : receiverSharePercentage;
       const tipTotal = Number(item.totalTips || 0) + Number(item.totalGratuity || 0);
-      const payoutTips = isContributor && tipTotal > 0 ? contributorTipsShare : item.payoutTips;
+      const payoutTips =
+        isContributor && tipTotal > 0
+          ? roundCurrency(-(totalReceiverPercentage / 100) * Number(item.totalTips || 0))
+          : roundCurrency((receiverPayoutPercentage / 100) * overallTips);
       const payoutGratuity =
-        isContributor && tipTotal > 0 ? contributorGratuityShare : item.payoutGratuity;
+        isContributor && tipTotal > 0
+          ? roundCurrency(-(totalReceiverPercentage / 100) * Number(item.totalGratuity || 0))
+          : roundCurrency((receiverPayoutPercentage / 100) * overallGratuity);
       const payoutAmount = payoutTips + payoutGratuity;
       const netPayout = Math.max(
         0,
@@ -170,7 +269,7 @@ export default function Reconciliation() {
         jobTitle: item.jobTitle,
         isContributor: item.isContributor,
         payoutReceiverId: item.payoutReceiverId,
-        payoutPercentage: item.payoutPercentage,
+        payoutPercentage: isContributor ? item.payoutPercentage : receiverPayoutPercentage,
         totalSales: item.totalSales,
         netSales: item.netSales,
         totalTips: item.totalTips,
@@ -201,6 +300,72 @@ export default function Reconciliation() {
     }, [] as typeof schedule.receiverRoles);
   };
 
+  const getReceiverPercentSum = (schedule: ApprovalScheduleWithContributors) => {
+    const receivers = schedule.contributors.filter(
+      (contributor) => (contributor.isContributor || "").toLowerCase() === "no",
+    );
+    const receiverRolePercentages = schedule.receiverRoles.reduce((acc, role) => {
+      const roleKey = normalizeRoleKey(role.receiverId);
+      acc[roleKey] = Number(role.payoutPercentage || 0);
+      return acc;
+    }, {} as Record<string, number>);
+    const receiverRoleCounts = receivers.reduce((acc, receiver) => {
+      if (isManualReceiver(receiver)) {
+        return acc;
+      }
+      const roleKey = normalizeRoleKey(receiver.jobTitle ?? receiver.payoutReceiverId);
+      acc[roleKey] = (acc[roleKey] ?? 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+    const { overallTips, overallGratuity } = getOverallBase(schedule);
+    return receivers.reduce((total, receiver) => {
+      const hasHoursWorked = isManualReceiver(receiver) || (receiver.hoursWorked ?? 0) > 0;
+      if (!hasHoursWorked) {
+        return total;
+      }
+      const roleKey = normalizeRoleKey(receiver.jobTitle ?? receiver.payoutReceiverId);
+      const roleTotal = receiverRolePercentages[roleKey] ?? 0;
+      const roleCount = receiverRoleCounts[roleKey] ?? 0;
+      const share = roleCount > 0 ? roleTotal / roleCount : 0;
+      const receiverPercentage = isManualReceiver(receiver)
+        ? Number(receiver.payoutPercentage || 0)
+        : share;
+      const payoutAmount =
+        (receiverPercentage / 100) * (Number(overallTips || 0) + Number(overallGratuity || 0));
+      if (payoutAmount <= 0) {
+        return total;
+      }
+      return total + receiverPercentage;
+    }, 0);
+  };
+
+  const activeEmployeeOptions = useMemo(() => {
+    const seen = new Set<string>();
+    return activeEmployeesByJob.reduce((acc, employee) => {
+      if (!employee.employeeGuid) {
+        return acc;
+      }
+      const displayName = [employee.firstName, employee.lastName]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+      if (!displayName) {
+        return acc;
+      }
+      const key = `${employee.employeeGuid}-${displayName}`;
+      if (seen.has(key)) {
+        return acc;
+      }
+      seen.add(key);
+      acc.push({
+        id: employee.employeeGuid,
+        name: displayName,
+        jobTitle: employee.jobTitle ?? "",
+      });
+      return acc;
+    }, [] as { id: string; name: string; jobTitle: string }[]);
+  }, [activeEmployeesByJob]);
+
   useEffect(() => {
     let isMounted = true;
     if (restaurantId === null) {
@@ -219,6 +384,24 @@ export default function Reconciliation() {
     };
   }, [restaurantId]);
 
+  useEffect(() => {
+    let isMounted = true;
+    if (userId === null) {
+      setJobTitles([]);
+      return () => {
+        isMounted = false;
+      };
+    }
+    fetchJobTitles(userId).then((data) => {
+      if (isMounted) {
+        setJobTitles(data);
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [userId]);
+
   const contributorCountLabel = useMemo(() => {
     if (isLoading) {
       return "Loading contributors...";
@@ -232,11 +415,36 @@ export default function Reconciliation() {
 
   return (
     <main className="px-6 py-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-gray-900">Approvals</h1>
-        <p className="text-sm text-gray-500">
-          Read-only payout summaries by contributor. {contributorCountLabel}
-        </p>
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold text-gray-900">Approvals</h1>
+          <p className="text-sm text-gray-500">
+            Read-only payout summaries by contributor. {contributorCountLabel}
+          </p>
+        </div>
+        <label className="mt-1 inline-flex items-center gap-2 text-sm text-gray-700">
+          <input
+            type="checkbox"
+            checked={false}
+            onChange={() => {
+              setExpandedScheduleKeys((current) => {
+                const allExpanded = schedules.length > 0 && current.size === schedules.length;
+                if (allExpanded) {
+                  return new Set();
+                }
+                return new Set(
+                  schedules.map(
+                    (schedule) => `${schedule.payoutScheduleId}-${schedule.businessDate}`,
+                  ),
+                );
+              });
+            }}
+            className="h-4 w-4 rounded border-gray-300 text-gray-900"
+          />
+          {expandedScheduleKeys.size === schedules.length && schedules.length > 0
+            ? "Collapse All"
+            : "Expand All"}
+        </label>
       </div>
 
       <div className="space-y-4">
@@ -251,39 +459,46 @@ export default function Reconciliation() {
         ) : (
           schedules.map((schedule) => {
             const scheduleKey = `${schedule.payoutScheduleId}-${schedule.businessDate}`;
-            const isActive = scheduleKey === activeScheduleKey;
+            const isActive = expandedScheduleKeys.has(scheduleKey);
             return (
               <section
                 key={scheduleKey}
-                className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm"
+                ref={(element) => {
+                  scheduleRefs.current[scheduleKey] = element;
+                }}
+                className="rounded-xl border border-gray-200 bg-white p-6 shadow-lg"
               >
                 <div
                   className="grid w-full cursor-pointer items-center gap-3 text-left sm:grid-cols-[1fr_auto_1fr]"
                   role="button"
                   tabIndex={0}
-                  onClick={() =>
-                    setActiveScheduleKey((current) => {
-                      const next = isActive ? null : scheduleKey;
-                      if (next === null) {
-                        setEditingScheduleKey(null);
+                  onClick={() => {
+                    setExpandedScheduleKeys((current) => {
+                      const next = new Set(current);
+                      if (next.has(scheduleKey)) {
+                        next.delete(scheduleKey);
+                      } else {
+                        next.add(scheduleKey);
                       }
                       return next;
-                    })
-                  }
+                    });
+                  }}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
-                      setActiveScheduleKey((current) => {
-                        const next = isActive ? null : scheduleKey;
-                        if (next === null) {
-                          setEditingScheduleKey(null);
+                      setExpandedScheduleKeys((current) => {
+                        const next = new Set(current);
+                        if (next.has(scheduleKey)) {
+                          next.delete(scheduleKey);
+                        } else {
+                          next.add(scheduleKey);
                         }
                         return next;
                       });
                     }
                   }}
                 >
-                  <div className="text-left">
+                  <div className="flex flex-wrap items-center gap-3">
                     <h2 className="text-lg font-semibold text-gray-900">
                       {schedule.name ?? "Payout Schedule"}
                       {schedule.businessDate ? (
@@ -293,24 +508,24 @@ export default function Reconciliation() {
                       ) : null}
                     </h2>
                   </div>
-                  <div className="flex flex-wrap items-center justify-center gap-3 text-sm text-gray-600">
-                    <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">
+                  <div className="flex flex-wrap items-center justify-center gap-2 text-sm text-gray-600">
+                    <span className="rounded-full border border-gray-200 bg-white px-3 py-1 text-black">
                       {schedule.payoutRuleLabel}
                     </span>
-                    <span className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-700">
+                    <span className="rounded-full border border-gray-200 bg-white px-3 py-1 text-black">
                       Contributors: {schedule.contributorCount}
                     </span>
-                    <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-700">
+                    <span className="rounded-full border border-gray-200 bg-white px-3 py-1 text-black">
                       Receivers: {schedule.receiverCount}
                     </span>
                   </div>
                   <div className="flex justify-end">
-                    <div className="flex w-32 flex-col items-end gap-2">
+                    <div className="flex items-center gap-2">
                       <button
                         type="button"
                         onClick={async (event) => {
                           event.stopPropagation();
-                          if (!restaurantId || !schedule.businessDate) {
+                          if (!restaurantId || !schedule.businessDate || userId === null) {
                             return;
                           }
                           const payloadItems = buildApprovalItems(schedule);
@@ -324,6 +539,7 @@ export default function Reconciliation() {
                             restaurantId,
                             payoutScheduleId: schedule.payoutScheduleId,
                             businessDate: schedule.businessDate,
+                            userId,
                           });
                           setApprovedScheduleKeys((current) => {
                             const next = new Set(current);
@@ -331,7 +547,7 @@ export default function Reconciliation() {
                             return next;
                           });
                         }}
-                        className="w-full rounded-lg bg-[#cab99a] px-4 py-2 text-sm font-semibold text-black shadow-md transition hover:bg-[#bfa986] hover:shadow-lg"
+                        className="rounded-lg bg-[#cab99a] px-5 py-2.5 text-base font-semibold text-black shadow-md transition hover:bg-[#bfa986] hover:shadow-lg"
                       >
                         Approve
                       </button>
@@ -339,8 +555,17 @@ export default function Reconciliation() {
                         type="button"
                         onClick={(event) => {
                           event.stopPropagation();
-                          setActiveScheduleKey(scheduleKey);
+                          setExpandedScheduleKeys((current) => {
+                            const next = new Set(current);
+                            next.add(scheduleKey);
+                            return next;
+                          });
                           setEditingScheduleKey(scheduleKey);
+                          setCustomReceivers((current) => ({
+                            ...current,
+                            [scheduleKey]: [],
+                          }));
+                          setCustomReceiverDropdowns({});
                           const expandedMap = schedule.contributors.reduce(
                             (acc, contributor) => {
                               const employeeKey = `${scheduleKey}-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`;
@@ -369,7 +594,7 @@ export default function Reconciliation() {
                           }
                         }}
                         disabled={approvedScheduleKeys.has(scheduleKey)}
-                        className={`w-full rounded-lg px-4 py-2 text-sm font-semibold shadow-md transition ${
+                        className={`min-w-[112px] rounded-lg px-5 py-2.5 text-base font-semibold shadow-md transition ${
                           approvedScheduleKeys.has(scheduleKey)
                             ? "cursor-not-allowed bg-gray-200 text-gray-400"
                             : "bg-[#cab99a] text-black hover:bg-[#bfa986] hover:shadow-lg"
@@ -383,39 +608,33 @@ export default function Reconciliation() {
 
                 <div className="mt-4 grid gap-3 sm:grid-cols-2 md:grid-cols-4">
                   <div>
-                    <p className="text-xs font-semibold uppercase text-gray-500">Start day</p>
-                    <p className="mt-1 text-sm text-gray-700">{formatValue(schedule.startDay)}</p>
+                    <p className="text-xs font-semibold uppercase text-gray-500">Sales</p>
+                    <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-gray-700">
+                      <span className="font-semibold text-gray-600">Total:</span>
+                      <span>{formatCurrency(schedule.totalSales)}</span>
+                      <span className="text-gray-400">|</span>
+                      <span className="font-semibold text-gray-600">Net:</span>
+                      <span>{formatCurrency(schedule.netSales)}</span>
+                    </p>
                   </div>
-                  <div>
-                    <p className="text-xs font-semibold uppercase text-gray-500">End day</p>
-                    <p className="mt-1 text-sm text-gray-700">{formatValue(schedule.endDay)}</p>
+                  <div className="md:col-start-2 md:col-span-2 md:justify-self-center">
+                    <p className="text-xs font-semibold uppercase text-gray-500">Tips &amp; Gratuity</p>
+                    <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-gray-700">
+                      <span className="font-semibold text-gray-600">Tips:</span>
+                      <span>{formatCurrency(schedule.totalTips)}</span>
+                      <span className="text-gray-400">|</span>
+                      <span className="font-semibold text-gray-600">Gratuity:</span>
+                      <span>{formatCurrency(schedule.totalGratuity)}</span>
+                      <span className="text-gray-400">|</span>
+                      <span className="font-semibold text-gray-600">Total:</span>
+                      <span>{formatCurrency(schedule.totalTips + schedule.totalGratuity)}</span>
+                    </p>
                   </div>
-                  <div>
-                    <p className="text-xs font-semibold uppercase text-gray-500">Start time</p>
-                    <p className="mt-1 text-sm text-gray-700">{formatValue(schedule.startTime)}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs font-semibold uppercase text-gray-500">End time</p>
-                    <p className="mt-1 text-sm text-gray-700">{formatValue(schedule.endTime)}</p>
-                  </div>
-                </div>
-
-                <div className="mt-4 grid gap-3 sm:grid-cols-2 md:grid-cols-4">
-                  <div>
-                    <p className="text-xs font-semibold uppercase text-gray-500">Total sales</p>
-                    <p className="mt-1 text-sm text-gray-700">{formatCurrency(schedule.totalSales)}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs font-semibold uppercase text-gray-500">Net sales</p>
-                    <p className="mt-1 text-sm text-gray-700">{formatCurrency(schedule.netSales)}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs font-semibold uppercase text-gray-500">Total tips</p>
-                    <p className="mt-1 text-sm text-gray-700">{formatCurrency(schedule.totalTips)}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs font-semibold uppercase text-gray-500">Total gratuity</p>
-                    <p className="mt-1 text-sm text-gray-700">{formatCurrency(schedule.totalGratuity)}</p>
+                  <div className="md:col-start-4 justify-self-start text-left md:pl-4">
+                    <p className="text-xs font-semibold uppercase text-gray-500">Orders</p>
+                    <p className="mt-1 text-sm text-gray-700">
+                      {(schedule.orderCount ?? 0).toLocaleString()}
+                    </p>
                   </div>
                 </div>
 
@@ -425,32 +644,46 @@ export default function Reconciliation() {
                       <div className="text-sm text-gray-500">No contributors assigned.</div>
                     ) : (
                       (() => {
-                        const contributors = schedule.contributors.filter(
-                          (contributor) => contributor.isContributor === "Yes",
-                        );
+                        const contributors = schedule.contributors
+                          .filter((contributor) => contributor.isContributor === "Yes")
+                          .slice()
+                          .sort((a, b) => {
+                            const firstA = (a.employeeName || "").trim().split(/\s+/)[0] || "";
+                            const firstB = (b.employeeName || "").trim().split(/\s+/)[0] || "";
+                            return firstA.localeCompare(firstB, undefined, { sensitivity: "base" });
+                          });
                         const eligibleContributors = contributors.filter((contributor) => {
                           const tipTotal =
                             Number(contributor.totalTips || 0) + Number(contributor.totalGratuity || 0);
                           return tipTotal > 0;
                         });
-                        const receivers = schedule.contributors.filter(
-                          (contributor) => contributor.isContributor === "No",
-                        );
-                        const totalReceiverTips = receivers.reduce(
-                          (total, receiver) => total + receiver.payoutTips,
-                          0,
-                        );
-                        const totalReceiverGratuity = receivers.reduce(
-                          (total, receiver) => total + receiver.payoutGratuity,
-                          0,
-                        );
-                        const totalReceiverPayout = totalReceiverTips + totalReceiverGratuity;
-                        const contributorPayoutShare =
-                          eligibleContributors.length > 0
-                            ? -(totalReceiverPayout / eligibleContributors.length)
-                            : 0;
+                        const receivers = schedule.contributors
+                          .filter((contributor) => contributor.isContributor === "No")
+                          .slice()
+                          .sort((a, b) =>
+                            (a.jobTitle || "").localeCompare(b.jobTitle || "", undefined, {
+                              sensitivity: "base",
+                            }),
+                          );
+                        const receiverRoleCounts = receivers.reduce((acc, receiver) => {
+                          if (isManualReceiver(receiver)) {
+                            return acc;
+                          }
+                          const roleKey = normalizeRoleKey(receiver.jobTitle ?? receiver.payoutReceiverId);
+                          acc[roleKey] = (acc[roleKey] ?? 0) + 1;
+                          return acc;
+                        }, {} as Record<string, number>);
+                        const receiverRolePercentages = schedule.receiverRoles.reduce((acc, role) => {
+                          const roleKey = normalizeRoleKey(role.receiverId);
+                          acc[roleKey] = Number(role.payoutPercentage || 0);
+                          return acc;
+                        }, {} as Record<string, number>);
+                        const totalReceiverPercentage = getReceiverPercentSum(schedule);
+                        const { overallTips: scheduleOverallTips, overallGratuity: scheduleOverallGratuity } =
+                          getOverallBase(schedule);
                         const ordered = [...contributors, ...receivers];
                         const missingRoles = getMissingRoles(schedule);
+                        const customEntries = customReceivers[scheduleKey] ?? [];
                         return (
                           <>
                             <div className="space-y-4">
@@ -466,18 +699,25 @@ export default function Reconciliation() {
                                       const tipTotal =
                                         Number(contributor.totalTips || 0) + Number(contributor.totalGratuity || 0);
                                       const isEligible = tipTotal > 0;
-                                      const contributorTipsShare =
-                                        eligibleContributors.length > 0
-                                          ? -(totalReceiverTips / eligibleContributors.length)
-                                          : 0;
-                                      const contributorGratuityShare =
-                                        eligibleContributors.length > 0
-                                          ? -(totalReceiverGratuity / eligibleContributors.length)
-                                          : 0;
-                                      const effectivePayoutShare = isEligible ? contributorPayoutShare : 0;
-                                      const payoutTipsDisplay = isEligible ? contributorTipsShare : 0;
-                                      const payoutGratuityDisplay = isEligible ? contributorGratuityShare : 0;
-                                      const payoutDisplay = Math.abs(effectivePayoutShare);
+                                      const payoutTipsDisplay = isEligible
+                                        ? roundCurrency(
+                                            -(totalReceiverPercentage / 100) *
+                                              Number(contributor.totalTips || 0),
+                                          )
+                                        : 0;
+                                      const payoutGratuityDisplay = isEligible
+                                        ? roundCurrency(
+                                            -(totalReceiverPercentage / 100) *
+                                              Number(contributor.totalGratuity || 0),
+                                          )
+                                        : 0;
+                                      const effectivePayoutShare = payoutTipsDisplay + payoutGratuityDisplay;
+                                      const payoutPercentageDisplay = isEligible
+                                        ? Math.abs(totalReceiverPercentage)
+                                        : 0;
+                                      const payoutDisplay = isEligible
+                                        ? roundCurrency((payoutPercentageDisplay / 100) * tipTotal)
+                                        : 0;
                                       const netPayoutDisplay = Math.max(
                                         0,
                                         getNetPayout(
@@ -490,7 +730,7 @@ export default function Reconciliation() {
                                       return (
                                         <div
                               key={employeeKey}
-                              className="rounded-lg border border-gray-200 bg-gray-50 p-5"
+                              className="rounded-lg border border-gray-200 bg-[#f4f2ee] p-5"
                             >
                               <div
                                 className="flex flex-wrap items-start justify-between gap-4"
@@ -513,71 +753,58 @@ export default function Reconciliation() {
                                 }}
                               >
                                 <div>
-                                  <div className="w-full overflow-x-auto">
-                                    <div className="grid min-w-[1280px] items-start gap-2 md:grid-cols-[280px_180px_180px_160px_180px_220px_180px_180px]">
-                                      <h3 className="text-base font-semibold text-gray-900 md:pr-2">
-                                        <span>
-                                          {contributor.employeeName}
-                                          {contributor.jobTitle ? ` (${contributor.jobTitle})` : ""}
-                                        </span>
-                                      </h3>
-                                    <div className="flex flex-col gap-2 self-start">
-                                      <span className="whitespace-nowrap rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700">
-                                        Total Sales: {formatCurrency(contributor.totalSales)}
+                                  <div className="grid w-full items-start gap-4 md:grid-cols-[280px_1fr]">
+                                    <h3 className="text-base font-semibold text-gray-900 md:pr-2">
+                                      <span>
+                                        {contributor.employeeName}
+                                        {contributor.jobTitle ? ` (${contributor.jobTitle})` : ""}
                                       </span>
-                                      <span className="whitespace-nowrap rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700">
-                                        Net Sales: {formatCurrency(contributor.netSales)}
-                                      </span>
-                                    </div>
-                                    <div className="flex flex-col gap-2">
-                                      <span className="whitespace-nowrap rounded-full bg-amber-50 px-3 py-1 text-sm text-amber-700">
+                                    </h3>
+                                    <div className="grid w-full items-center gap-4 md:grid-cols-[150px_150px_260px_220px_180px]">
+                                      <span className="whitespace-nowrap rounded-full bg-white px-3 py-1 text-sm text-black">
                                         Tips: {formatCurrency(contributor.totalTips)}
                                       </span>
-                                      <span className="whitespace-nowrap rounded-full bg-sky-50 px-3 py-1 text-sm text-sky-700">
+                                      <span className="whitespace-nowrap rounded-full bg-white px-3 py-1 text-sm text-black">
                                         Gratuity: {formatCurrency(contributor.totalGratuity)}
                                       </span>
-                                    </div>
-                                    <div className="mt-1 text-center">
-                                      <p className="text-sm font-normal text-gray-700">Total Tips &amp; Gratuity</p>
-                                      <p className="mt-2 text-sm font-semibold text-gray-900">
+                                      <span className="whitespace-nowrap rounded-full bg-white px-3 py-1 text-sm text-black">
+                                        Total (Tips &amp; Gratuity):{" "}
                                         {formatCurrency(contributor.totalTips + contributor.totalGratuity)}
-                                      </p>
-                                    </div>
-                                    <div className="ml-auto flex justify-end">
-                                      <span className="min-w-[220px] whitespace-nowrap rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700">
-                                        Payout: {contributor.payoutPercentage.toFixed(2)}% (
+                                      </span>
+                                      <span className="min-w-[160px] whitespace-nowrap rounded-full bg-white px-3 py-1 text-sm text-black">
+                                        Payout:{" "}
+                                        <span className="font-semibold text-red-600">
+                                          {payoutPercentageDisplay.toFixed(2)}%
+                                        </span>{" "}
+                                        (
                                         <span className="font-semibold text-red-600">
                                           {formatPayoutAmount(payoutDisplay)}
                                         </span>
                                         )
                                       </span>
-                                    </div>
-                                    <div className="ml-4 flex justify-start">
-                                      <span className="whitespace-nowrap rounded-full bg-emerald-50 pl-3 pr-2 py-1 text-sm font-semibold text-emerald-700">
+                                      <span className="whitespace-nowrap rounded-full bg-white pl-3 pr-2 py-1 text-sm font-normal text-black">
                                         Net Payout: {formatCurrency(netPayoutDisplay)}
                                       </span>
                                     </div>
-                                    <div />
                                   </div>
-                                  </div>
-                                  <p className="-mt-6 text-xs text-gray-500">{contributor.employeeGuid}</p>
+                                  <p className="mt-2 text-xs text-gray-500">{contributor.employeeGuid}</p>
                                 </div>
                                 <div className="flex flex-wrap items-center gap-3 text-sm text-gray-600" />
                               </div>
 
                               {isExpanded ? (
                                 <>
-                                  <div className="mt-4 grid grid-cols-[220px_220px_140px_180px_180px_1fr] gap-4">
+                                  <div className="mt-4 grid grid-cols-4 gap-6">
                                     <div>
-                                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">In time</p>
-                                      <p className="mt-2 text-sm font-semibold text-gray-900">
-                                        {formatValue(contributor.inTime)}
+                                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                        In/Out time
                                       </p>
-                                    </div>
-                                    <div className="col-start-2">
-                                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Out time</p>
-                                      <p className="mt-2 text-sm font-semibold text-gray-900">
-                                        {formatValue(contributor.outTime)}
+                                      <p className="mt-2 flex flex-wrap items-center gap-2 text-sm text-gray-900">
+                                        <span className="font-semibold text-gray-600">In:</span>
+                                        <span>{formatValue(contributor.inTime)}</span>
+                                        <span className="text-gray-400">|</span>
+                                        <span className="font-semibold text-gray-600">Out:</span>
+                                        <span>{formatValue(contributor.outTime)}</span>
                                       </p>
                                     </div>
                                     <div>
@@ -586,56 +813,77 @@ export default function Reconciliation() {
                                         {contributor.hoursWorked ? contributor.hoursWorked.toFixed(2) : "0.00"}
                                       </p>
                                     </div>
-                                    <div>
-                                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Total sales</p>
-                                      <p className="mt-2 text-sm font-semibold text-gray-900">
-                                        {formatCurrency(contributor.totalSales)}
+                                    <div className="text-center">
+                                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Sales</p>
+                                      <p className="mt-2 flex flex-wrap items-center justify-center gap-2 text-sm text-gray-900">
+                                        <span className="font-semibold text-gray-600">Total:</span>
+                                        <span>{formatCurrency(contributor.totalSales)}</span>
+                                        <span className="text-gray-400">|</span>
+                                        <span className="font-semibold text-gray-600">Net:</span>
+                                        <span>{formatCurrency(contributor.netSales)}</span>
                                       </p>
                                     </div>
-                                    <div>
-                                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Net sales</p>
+                                    <div className="text-center">
+                                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Orders</p>
                                       <p className="mt-2 text-sm font-semibold text-gray-900">
-                                        {formatCurrency(contributor.netSales)}
+                                        {(contributor.orderCount ?? 0).toLocaleString()}
                                       </p>
                                     </div>
                                     <div />
                                   </div>
 
-                                  <div className="mt-5">
+                                  <div className="mt-0">
                                     <h4 className="text-sm font-semibold text-gray-900">Payout details</h4>
                                     <div className="mt-3 grid items-start gap-2 grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(160px,auto)_minmax(160px,auto)]">
                                       <div>
-                                        <p className="text-xs font-semibold uppercase text-gray-500">Overall</p>
+                                        <p className="text-xs font-semibold uppercase text-gray-500">
+                                          Tips &amp; Gratuity
+                                        </p>
                                         <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-gray-700">
                                           <span className="font-semibold text-gray-600">Tips:</span>
-                                          <span>{formatCurrency(contributor.overallTips)}</span>
+                                          <span>{formatCurrency(contributor.totalTips)}</span>
                                           <span className="text-gray-400">|</span>
                                           <span className="font-semibold text-gray-600">Gratuity:</span>
-                                          <span>{formatCurrency(contributor.overallGratuity)}</span>
+                                          <span>{formatCurrency(contributor.totalGratuity)}</span>
+                                          <span className="text-gray-400">|</span>
+                                          <span className="font-semibold text-gray-600">Total:</span>
+                                          <span>{formatCurrency(contributor.totalTips + contributor.totalGratuity)}</span>
                                         </p>
                                       </div>
                                       <div>
                                         <p className="text-xs font-semibold uppercase text-gray-500">Payout</p>
-                                        <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-gray-700">
-                                          <span className="font-semibold text-gray-600">Tips:</span>
-                                          <span className="font-semibold text-red-600">
-                                            {formatCurrency(Math.abs(payoutTipsDisplay))}
-                                          </span>
-                                          <span className="text-gray-400">|</span>
-                                          <span className="font-semibold text-gray-600">Gratuity:</span>
-                                          <span className="font-semibold text-red-600">
-                                            {formatCurrency(Math.abs(payoutGratuityDisplay))}
-                                          </span>
-                                        </p>
-                                      </div>
-                                      <label className="-ml-[36px] text-xs font-semibold uppercase tracking-wide text-gray-500">
-                                        Payout percentage
-                                        <input
-                                          readOnly
-                                          value={`${contributor.payoutPercentage.toFixed(2)}%`}
-                                          className="mt-2 w-[140px] rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700"
-                                        />
-                                      </label>
+                                      <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-gray-700">
+                                        <span className="font-semibold text-gray-600">Tips:</span>
+                                        <span className="font-semibold text-red-600">
+                                          {formatCurrency(Math.abs(payoutTipsDisplay))}
+                                        </span>
+                                        <span className="text-gray-400">|</span>
+                                        <span className="font-semibold text-gray-600">Gratuity:</span>
+                                        <span className="font-semibold text-red-600">
+                                          {formatCurrency(Math.abs(payoutGratuityDisplay))}
+                                        </span>
+                                        <span className="text-gray-400">|</span>
+                                        <span className="font-semibold text-gray-600">Total:</span>
+                                        <span className="font-semibold text-red-600">
+                                          {formatCurrency(Math.abs(payoutTipsDisplay + payoutGratuityDisplay))}
+                                        </span>
+                                      </p>
+                                    </div>
+                                      {(() => {
+                                        const netContributorPercentage = isEligible
+                                          ? Math.max(0, 100 - Math.abs(totalReceiverPercentage))
+                                          : 0;
+                                        return (
+                                          <label className="-ml-[36px] text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                          Payout percentage
+                                          <input
+                                            readOnly
+                                          value={`${netContributorPercentage.toFixed(2)}%`}
+                                          className="mt-3 w-[140px] rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-black"
+                                          />
+                                        </label>
+                                        );
+                                      })()}
                                       <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">
                                         Net payout
                                         <div className="mt-2 text-sm font-semibold text-gray-900">
@@ -672,7 +920,34 @@ export default function Reconciliation() {
                                       {receivers.map((contributor) => {
                                         const employeeKey = `${scheduleKey}-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`;
                                         const isExpanded = Boolean(expandedEmployees[employeeKey]);
-                                        const payoutAmount = contributor.payoutTips + contributor.payoutGratuity;
+                                        const receiverRoleKey = normalizeRoleKey(
+                                          contributor.jobTitle ?? contributor.payoutReceiverId,
+                                        );
+                                        const receiverRoleCount =
+                                          receiverRoleCounts[receiverRoleKey] ?? 0;
+                                        const rolePercentageTotal =
+                                          receiverRolePercentages[receiverRoleKey] ?? 0;
+                                        const receiverSharePercentage =
+                                          receiverRoleCount > 0
+                                            ? rolePercentageTotal / receiverRoleCount
+                                            : 0;
+                                        const receiverPayoutPercentage = isManualReceiver(contributor)
+                                          ? Number(contributor.payoutPercentage || 0)
+                                          : receiverSharePercentage;
+                                        const hasHoursWorked =
+                                          isManualReceiver(contributor) ||
+                                          (contributor.hoursWorked ?? 0) > 0;
+                                        const payoutTipsDisplay = hasHoursWorked
+                                          ? roundCurrency(
+                                              (receiverPayoutPercentage / 100) * scheduleOverallTips,
+                                            )
+                                          : 0;
+                                        const payoutGratuityDisplay = hasHoursWorked
+                                          ? roundCurrency(
+                                              (receiverPayoutPercentage / 100) * scheduleOverallGratuity,
+                                            )
+                                          : 0;
+                                        const payoutAmount = payoutTipsDisplay + payoutGratuityDisplay;
                                         const payoutDisplay = Math.max(0, payoutAmount);
                                         const netPayoutDisplay = Math.max(
                                           0,
@@ -683,12 +958,13 @@ export default function Reconciliation() {
                                             payoutAmount,
                                           ),
                                         );
-                                        const payoutTipsDisplay = contributor.payoutTips;
-                                        const payoutGratuityDisplay = contributor.payoutGratuity;
+                                        const payoutPercentageDisplay = hasHoursWorked
+                                          ? receiverPayoutPercentage
+                                          : 0;
                                         return (
                                           <div
                                             key={employeeKey}
-                                            className="rounded-lg border border-gray-200 bg-gray-50 p-5"
+                                            className="rounded-lg border border-gray-200 bg-[#f4f2ee] p-5"
                                           >
                                             <div
                                               className="flex flex-wrap items-start justify-between gap-4"
@@ -711,39 +987,26 @@ export default function Reconciliation() {
                                               }}
                                             >
                                               <div>
-                                              <div className="w-full overflow-x-auto">
-                                                <div className="grid min-w-[1280px] items-start gap-2 md:grid-cols-[280px_180px_180px_160px_180px_220px_180px_180px]">
+                                              <div className="grid w-full items-start gap-4 md:grid-cols-[280px_1fr]">
                                                 <h3 className="text-base font-semibold text-gray-900 md:pr-2">
                                                   <span>
                                                     {contributor.employeeName}
                                                     {contributor.jobTitle ? ` (${contributor.jobTitle})` : ""}
                                                   </span>
                                                 </h3>
-                                                <div className="flex flex-col gap-2 self-start">
-                                                  <span className="whitespace-nowrap rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700">
-                                                    Total Sales: {formatCurrency(contributor.totalSales)}
-                                                  </span>
-                                                  <span className="whitespace-nowrap rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700">
-                                                    Net Sales: {formatCurrency(contributor.netSales)}
-                                                  </span>
-                                                </div>
-                                                <div className="flex flex-col gap-2">
-                                                  <span className="whitespace-nowrap rounded-full bg-amber-50 px-3 py-1 text-sm text-amber-700">
+                                                <div className="grid w-full items-center gap-4 md:grid-cols-[150px_150px_260px_220px_180px]">
+                                                  <span className="whitespace-nowrap rounded-full bg-white px-3 py-1 text-sm text-black">
                                                     Tips: {formatCurrency(contributor.totalTips)}
                                                   </span>
-                                                  <span className="whitespace-nowrap rounded-full bg-sky-50 px-3 py-1 text-sm text-sky-700">
+                                                  <span className="whitespace-nowrap rounded-full bg-white px-3 py-1 text-sm text-black">
                                                     Gratuity: {formatCurrency(contributor.totalGratuity)}
                                                   </span>
-                                                </div>
-                                                <div className="mt-1 text-center">
-                                                  <p className="text-sm font-normal text-gray-700">Total Tips &amp; Gratuity</p>
-                                                  <p className="mt-2 text-sm font-semibold text-gray-900">
+                                                  <span className="whitespace-nowrap rounded-full bg-white px-3 py-1 text-sm text-black">
+                                                    Total (Tips &amp; Gratuity):{" "}
                                                     {formatCurrency(contributor.totalTips + contributor.totalGratuity)}
-                                                  </p>
-                                                </div>
-                                                <div className="ml-auto flex justify-end">
-                                                  <span className="min-w-[220px] whitespace-nowrap rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700">
-                                                    Payout: {contributor.payoutPercentage.toFixed(2)}% (
+                                                  </span>
+                                                  <span className="min-w-[160px] whitespace-nowrap rounded-full bg-white px-3 py-1 text-sm text-black">
+                                                    Payout: {payoutPercentageDisplay.toFixed(2)}% (
                                                     <span
                                                       className={
                                                         payoutDisplay === 0
@@ -757,33 +1020,29 @@ export default function Reconciliation() {
                                                     </span>
                                                     )
                                                   </span>
-                                                </div>
-                                                <div className="ml-4 flex justify-start">
-                                                  <span className="whitespace-nowrap rounded-full bg-emerald-50 pl-3 pr-2 py-1 text-sm font-semibold text-emerald-700">
+                                                  <span className="whitespace-nowrap rounded-full bg-white pl-3 pr-2 py-1 text-sm font-normal text-black">
                                                     Net Payout: {formatCurrency(netPayoutDisplay)}
                                                   </span>
                                                 </div>
-                                                <div />
                                               </div>
-                                              </div>
-                                                <p className="-mt-6 text-xs text-gray-500">{contributor.employeeGuid}</p>
+                                                <p className="mt-2 text-xs text-gray-500">{contributor.employeeGuid}</p>
                                               </div>
                                               <div className="flex flex-wrap items-center gap-3 text-sm text-gray-600" />
                                             </div>
 
                                             {isExpanded ? (
                                               <>
-                                                <div className="mt-4 grid grid-cols-[220px_220px_140px_180px_180px_1fr] gap-4">
+                                                <div className="mt-4 grid grid-cols-4 gap-6">
                                                   <div>
-                                                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">In time</p>
-                                                    <p className="mt-2 text-sm font-semibold text-gray-900">
-                                                      {formatValue(contributor.inTime)}
+                                                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                                      In/Out time
                                                     </p>
-                                                  </div>
-                                                  <div className="col-start-2">
-                                                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Out time</p>
-                                                    <p className="mt-2 text-sm font-semibold text-gray-900">
-                                                      {formatValue(contributor.outTime)}
+                                                    <p className="mt-2 flex flex-wrap items-center gap-2 text-sm text-gray-900">
+                                                      <span className="font-semibold text-gray-600">In:</span>
+                                                      <span>{formatValue(contributor.inTime)}</span>
+                                                      <span className="text-gray-400">|</span>
+                                                      <span className="font-semibold text-gray-600">Out:</span>
+                                                      <span>{formatValue(contributor.outTime)}</span>
                                                     </p>
                                                   </div>
                                                   <div>
@@ -792,42 +1051,78 @@ export default function Reconciliation() {
                                                       {contributor.hoursWorked ? contributor.hoursWorked.toFixed(2) : "0.00"}
                                                     </p>
                                                   </div>
-                                                  <div>
-                                                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Total sales</p>
-                                                    <p className="mt-2 text-sm font-semibold text-gray-900">
-                                                      {formatCurrency(contributor.totalSales)}
+                                                  <div className="text-center">
+                                                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Sales</p>
+                                                    <p className="mt-2 flex flex-wrap items-center justify-center gap-2 text-sm text-gray-900">
+                                                      <span className="font-semibold text-gray-600">Total:</span>
+                                                      <span>{formatCurrency(contributor.totalSales)}</span>
+                                                      <span className="text-gray-400">|</span>
+                                                      <span className="font-semibold text-gray-600">Net:</span>
+                                                      <span>{formatCurrency(contributor.netSales)}</span>
                                                     </p>
                                                   </div>
-                                                  <div>
-                                                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Net sales</p>
+                                                  <div className="text-center">
+                                                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Orders</p>
                                                     <p className="mt-2 text-sm font-semibold text-gray-900">
-                                                      {formatCurrency(contributor.netSales)}
+                                                      {(contributor.orderCount ?? 0).toLocaleString()}
                                                     </p>
                                                   </div>
                                                   <div />
                                                 </div>
 
-                                                <div className="mt-5">
+                                                <div className="mt-0">
                                                   <h4 className="text-sm font-semibold text-gray-900">Payout details</h4>
                                                   <div className="mt-3 grid items-start gap-2 grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(160px,auto)_minmax(160px,auto)]">
                                                     <div>
-                                                      <p className="text-xs font-semibold uppercase text-gray-500">Overall</p>
+                                                      <p className="text-xs font-semibold uppercase text-gray-500">
+                                                        Tips &amp; Gratuity
+                                                      </p>
                                                       <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-gray-700">
                                                         <span className="font-semibold text-gray-600">Tips:</span>
-                                                        <span>{formatCurrency(contributor.overallTips)}</span>
+                                                        <span>{formatCurrency(contributor.totalTips)}</span>
                                                         <span className="text-gray-400">|</span>
                                                         <span className="font-semibold text-gray-600">Gratuity:</span>
-                                                        <span>{formatCurrency(contributor.overallGratuity)}</span>
+                                                        <span>{formatCurrency(contributor.totalGratuity)}</span>
+                                                        <span className="text-gray-400">|</span>
+                                                        <span className="font-semibold text-gray-600">Total:</span>
+                                                        <span>{formatCurrency(contributor.totalTips + contributor.totalGratuity)}</span>
                                                       </p>
                                                     </div>
                                                     <div>
                                                       <p className="text-xs font-semibold uppercase text-gray-500">Payout</p>
                                                       <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-gray-700">
                                                         <span className="font-semibold text-gray-600">Tips:</span>
-                                                        <span>{formatCurrency(payoutTipsDisplay)}</span>
+                                                        <span
+                                                          className={
+                                                            payoutTipsDisplay > 0
+                                                              ? "font-semibold text-emerald-700"
+                                                              : "font-semibold text-red-600"
+                                                          }
+                                                        >
+                                                          {formatCurrency(payoutTipsDisplay)}
+                                                        </span>
                                                         <span className="text-gray-400">|</span>
                                                         <span className="font-semibold text-gray-600">Gratuity:</span>
-                                                        <span>{formatCurrency(payoutGratuityDisplay)}</span>
+                                                        <span
+                                                          className={
+                                                            payoutGratuityDisplay > 0
+                                                              ? "font-semibold text-emerald-700"
+                                                              : "font-semibold text-red-600"
+                                                          }
+                                                        >
+                                                          {formatCurrency(payoutGratuityDisplay)}
+                                                        </span>
+                                                        <span className="text-gray-400">|</span>
+                                                        <span className="font-semibold text-gray-600">Total:</span>
+                                                        <span
+                                                          className={
+                                                            payoutTipsDisplay + payoutGratuityDisplay > 0
+                                                              ? "font-semibold text-emerald-700"
+                                                              : "font-semibold text-red-600"
+                                                          }
+                                                        >
+                                                          {formatCurrency(payoutTipsDisplay + payoutGratuityDisplay)}
+                                                        </span>
                                                       </p>
                                                     </div>
                                                     <label className="-ml-[36px] text-xs font-semibold uppercase tracking-wide text-gray-500">
@@ -835,10 +1130,10 @@ export default function Reconciliation() {
                                                       <input
                                                         key={`${scheduleKey}-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}-${resetToken}`}
                                                         value={
-                                                          payoutEdits[
-                                                            `${scheduleKey}-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`
-                                                          ] ?? `${contributor.payoutPercentage.toFixed(2)}%`
-                                                        }
+                                                        payoutEdits[
+                                                          `${scheduleKey}-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`
+                                                        ] ?? `${payoutPercentageDisplay.toFixed(2)}%`
+                                                      }
                                                         readOnly={editingScheduleKey !== scheduleKey}
                                                         onChange={(event) => {
                                                           const key = `${scheduleKey}-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`;
@@ -847,7 +1142,7 @@ export default function Reconciliation() {
                                                             [key]: event.target.value,
                                                           }));
                                                         }}
-                                                        className="mt-2 w-[140px] rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700"
+                                                        className="mt-3 w-[140px] rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700"
                                                       />
                                                     </label>
                                                     <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">
@@ -1032,6 +1327,211 @@ export default function Reconciliation() {
                                           <p className="mt-2 text-xs text-gray-500">No employee assigned for this job title.</p>
                                         </div>
                                       ))}
+                                      {editingScheduleKey === scheduleKey ? (
+                                        <div className="rounded-lg border border-dashed border-gray-200 bg-white p-5 text-sm text-gray-600">
+                                          <div className="flex items-center justify-between">
+                                            <div className="text-sm font-semibold text-gray-900">Add receiver</div>
+                                            <button
+                                              type="button"
+                                              onClick={() => addCustomReceiver(scheduleKey)}
+                                              className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-gray-700 shadow-sm transition hover:bg-gray-50"
+                                            >
+                                              Add Person
+                                            </button>
+                                          </div>
+                                          {customEntries.length === 0 ? (
+                                            <p className="mt-3 text-sm text-gray-500">
+                                              Add a person, select a job title, and enter a payout percentage.
+                                            </p>
+                                          ) : (
+                                            customEntries.map((entry) => {
+                                              const entryKey = `${scheduleKey}-custom-${entry.id}`;
+                                              const personDropdownKey = `${entryKey}-person`;
+                                              const jobDropdownKey = `${entryKey}-job`;
+                                              const blockedNames = new Set<string>();
+                                              const blockedGuids = new Set<string>();
+                                              schedule.contributors.forEach((contributor) => {
+                                                const isReceiver =
+                                                  (contributor.isContributor || "").toLowerCase() === "no";
+                                                const payoutAmount =
+                                                  Number(contributor.payoutTips || 0) +
+                                                  Number(contributor.payoutGratuity || 0);
+                                                const netPayout = Math.max(
+                                                  0,
+                                                  getNetPayout(
+                                                    contributor.isContributor,
+                                                    contributor.totalTips,
+                                                    contributor.totalGratuity,
+                                                    payoutAmount,
+                                                  ),
+                                                );
+                                                const isContributorWithPayout =
+                                                  (contributor.isContributor || "").toLowerCase() === "yes" &&
+                                                  netPayout > 0;
+                                                if (!isReceiver && !isContributorWithPayout) {
+                                                  return;
+                                                }
+                                                const nameKey = (contributor.employeeName || "")
+                                                  .trim()
+                                                  .toLowerCase();
+                                                if (nameKey) {
+                                                  blockedNames.add(nameKey);
+                                                }
+                                                const guidKey = (contributor.employeeGuid || "").trim();
+                                                if (guidKey) {
+                                                  blockedGuids.add(guidKey);
+                                                }
+                                              });
+                                              const filteredEmployees = activeEmployeeOptions.filter((employee) => {
+                                                const nameKey = employee.name.trim().toLowerCase();
+                                                if (blockedNames.has(nameKey)) {
+                                                  return false;
+                                                }
+                                                if (blockedGuids.has(employee.id)) {
+                                                  return false;
+                                                }
+                                                return employee.name
+                                                  .toLowerCase()
+                                                  .includes(entry.employeeName.trim().toLowerCase());
+                                              });
+                                              return (
+                                                <div
+                                                  key={entry.id}
+                                                  className="mt-4 grid items-center gap-3 md:grid-cols-[minmax(0,1fr)_minmax(220px,1fr)_minmax(160px,auto)_minmax(120px,auto)]"
+                                                >
+                                                  <label className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                                    Team Member
+                                                    <div className="relative mt-2" data-custom-receiver-dropdown="true">
+                                                      <input
+                                                        value={entry.employeeName}
+                                                        onChange={(event) => {
+                                                          updateCustomReceiver(scheduleKey, entry.id, {
+                                                            employeeGuid: null,
+                                                            employeeName: event.target.value,
+                                                          });
+                                                          setCustomReceiverDropdowns((current) => ({
+                                                            ...current,
+                                                            [personDropdownKey]: true,
+                                                          }));
+                                                        }}
+                                                        onFocus={() =>
+                                                          setCustomReceiverDropdowns((current) => ({
+                                                            ...current,
+                                                            [personDropdownKey]: true,
+                                                          }))
+                                                        }
+                                                        placeholder="Select or add person"
+                                                        className="w-full rounded-lg border border-gray-300 bg-white px-4 py-3 text-sm text-gray-700 outline-none focus:ring-2 focus:ring-gray-900"
+                                                      />
+                                                      {customReceiverDropdowns[personDropdownKey] ? (
+                                                        <div className="absolute z-10 mt-2 w-full max-h-60 overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg">
+                                                          {filteredEmployees.length === 0 ? (
+                                                            <div className="px-4 py-3 text-sm text-gray-500">
+                                                              No matching employees
+                                                            </div>
+                                                          ) : (
+                                                            filteredEmployees.map((employee) => (
+                                                              <button
+                                                                key={employee.id}
+                                                                type="button"
+                                                                onClick={() => {
+                                                                  updateCustomReceiver(scheduleKey, entry.id, {
+                                                                    employeeGuid: employee.id,
+                                                                    employeeName: employee.name,
+                                                                    jobTitle:
+                                                                      entry.jobTitle ||
+                                                                      employee.jobTitle ||
+                                                                      "",
+                                                                  });
+                                                                  setCustomReceiverDropdowns({});
+                                                                }}
+                                                                className="w-full px-4 py-2 text-left text-sm text-gray-900 hover:bg-gray-50"
+                                                              >
+                                                                {employee.name}
+                                                              </button>
+                                                            ))
+                                                          )}
+                                                        </div>
+                                                      ) : null}
+                                                    </div>
+                                                  </label>
+                                                  <label className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                                    Job Title
+                                                    <div className="relative mt-2" data-custom-receiver-dropdown="true">
+                                                      <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                          setCustomReceiverDropdowns((current) => ({
+                                                            ...current,
+                                                            [jobDropdownKey]: !current[jobDropdownKey],
+                                                          }))
+                                                        }
+                                                        className="flex w-full items-center justify-between gap-3 rounded-lg border border-gray-300 bg-white px-4 py-3 text-left text-sm font-normal text-gray-700 outline-none focus:ring-2 focus:ring-gray-900"
+                                                      >
+                                                        <span
+                                                          className={
+                                                            entry.jobTitle ? "text-gray-900" : "text-gray-400"
+                                                          }
+                                                        >
+                                                          {entry.jobTitle || "Select job title"}
+                                                        </span>
+                                                        <span className="ml-2 text-gray-500">▾</span>
+                                                      </button>
+                                                      {customReceiverDropdowns[jobDropdownKey] ? (
+                                                        <div className="absolute z-10 mt-2 w-full max-h-60 overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg">
+                                                          {jobTitles.length === 0 ? (
+                                                            <div className="px-4 py-3 text-sm text-gray-500">
+                                                              No job titles available
+                                                            </div>
+                                                          ) : (
+                                                            jobTitles.map((jobTitle) => (
+                                                              <button
+                                                                key={jobTitle}
+                                                                type="button"
+                                                                onClick={() => {
+                                                                  updateCustomReceiver(scheduleKey, entry.id, {
+                                                                    jobTitle,
+                                                                  });
+                                                                  setCustomReceiverDropdowns({});
+                                                                }}
+                                                                className="w-full px-4 py-2 text-left text-sm text-gray-900 hover:bg-gray-50"
+                                                              >
+                                                                {jobTitle}
+                                                              </button>
+                                                            ))
+                                                          )}
+                                                        </div>
+                                                      ) : null}
+                                                    </div>
+                                                  </label>
+                                                  <label className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                                    Payout percentage
+                                                    <input
+                                                      value={entry.payoutPercentage}
+                                                      onChange={(event) =>
+                                                        updateCustomReceiver(scheduleKey, entry.id, {
+                                                          payoutPercentage: event.target.value,
+                                                        })
+                                                      }
+                                                      placeholder="0.00%"
+                                                      className="mt-2 w-[140px] rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700"
+                                                    />
+                                                  </label>
+                                                  <div className="flex justify-end">
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => removeCustomReceiver(scheduleKey, entry.id)}
+                                                      className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-wide text-gray-700 shadow-sm transition hover:bg-gray-50"
+                                                    >
+                                                      Remove
+                                                    </button>
+                                                  </div>
+                                                </div>
+                                              );
+                                            })
+                                          )}
+                                        </div>
+                                      ) : null}
                                     </>
                                   )}
                                 </div>
@@ -1079,6 +1579,53 @@ export default function Reconciliation() {
                                             (contributor) =>
                                               `${contributor.employeeGuid}-${contributor.jobTitle ?? ""}-${contributor.isContributor}`,
                                           ),
+                                        );
+                                        const customReceiverEntries = (customReceivers[scheduleKey] ?? []).reduce(
+                                          (acc, entry) => {
+                                            const name = entry.employeeName.trim();
+                                            const jobTitle = entry.jobTitle.trim();
+                                            if (!name || !jobTitle) {
+                                              return acc;
+                                            }
+                                            const parsed = entry.payoutPercentage
+                                              ? parsePercentage(entry.payoutPercentage)
+                                              : null;
+                                            if (parsed === null) {
+                                              return acc;
+                                            }
+                                            const fallbackGuid = entry.employeeGuid ?? `custom-${entry.id}`;
+                                            const entryKey = `${fallbackGuid}-${jobTitle}-No`;
+                                            if (existingKeys.has(entryKey)) {
+                                              return acc;
+                                            }
+                                            existingKeys.add(entryKey);
+                                            const payoutTips = roundCurrency((parsed / 100) * overallTips);
+                                            const payoutGratuity = roundCurrency(
+                                              (parsed / 100) * overallGratuity,
+                                            );
+                                            acc.push({
+                                              employeeGuid: fallbackGuid,
+                                              employeeName: name,
+                                              jobTitle,
+                                              businessDate: scheduleItem.businessDate,
+                                              inTime: null,
+                                              outTime: null,
+                                              hoursWorked: 1,
+                                              isContributor: "No",
+                                              payoutReceiverId: jobTitle,
+                                              payoutPercentage: parsed,
+                                              totalSales: 0,
+                                              netSales: 0,
+                                              totalTips: 0,
+                                              totalGratuity: 0,
+                                              overallTips,
+                                              overallGratuity,
+                                              payoutTips,
+                                              payoutGratuity,
+                                            });
+                                            return acc;
+                                          },
+                                          [] as ApprovalScheduleWithContributors["contributors"],
                                         );
                                         const newEntries = scheduleItem.receiverRoles.reduce(
                                           (acc, role) => {
@@ -1134,29 +1681,71 @@ export default function Reconciliation() {
                                           const roleKey = `${scheduleKey}-role-${role.receiverId ?? "role"}`;
                                           const editedValue = payoutEdits[roleKey];
                                           const parsed = editedValue ? parsePercentage(editedValue) : null;
-                                          if (parsed === null) {
-                                            return role;
+                                          if (parsed !== null) {
+                                            return {
+                                              ...role,
+                                              payoutPercentage: parsed,
+                                            };
                                           }
-                                          return {
-                                            ...role,
-                                            payoutPercentage: parsed,
-                                          };
+                                          return role;
                                         });
+                                        const existingRoleKeys = new Set(
+                                          updatedRoles.map((role) => normalizeRoleKey(role.receiverId)),
+                                        );
+                                        const addedRoles = (customReceivers[scheduleKey] ?? [])
+                                          .reduce((acc, entry) => {
+                                            const jobTitle = entry.jobTitle.trim();
+                                            if (!jobTitle) {
+                                              return acc;
+                                            }
+                                            const parsed = entry.payoutPercentage
+                                              ? parsePercentage(entry.payoutPercentage)
+                                              : null;
+                                            if (parsed === null) {
+                                              return acc;
+                                            }
+                                            const normalizedKey = normalizeRoleKey(jobTitle);
+                                            if (existingRoleKeys.has(normalizedKey)) {
+                                              return acc;
+                                            }
+                                            existingRoleKeys.add(normalizedKey);
+                                            acc.push({
+                                              receiverId: jobTitle,
+                                              payoutPercentage: parsed,
+                                              isContributor: false,
+                                            });
+                                            return acc;
+                                          }, [] as ApprovalScheduleWithContributors["receiverRoles"]);
                                         const updatedSchedule = {
                                           ...scheduleItem,
-                                          contributors: [...updatedContributors, ...newEntries],
-                                          receiverRoles: updatedRoles,
+                                          contributors: [
+                                            ...updatedContributors,
+                                            ...newEntries,
+                                            ...customReceiverEntries,
+                                          ],
+                                          receiverRoles: [...updatedRoles, ...addedRoles],
                                         };
-                                        const payloadItems = buildApprovalItems(updatedSchedule);
-                                        if (updatedSchedule.businessDate) {
+                                        const nextContributorCount = updatedSchedule.contributors.filter(
+                                          (contributor) => contributor.isContributor !== "No",
+                                        ).length;
+                                        const nextReceiverCount = updatedSchedule.contributors.filter(
+                                          (contributor) => contributor.isContributor === "No",
+                                        ).length;
+                                        const normalizedSchedule = {
+                                          ...updatedSchedule,
+                                          contributorCount: nextContributorCount,
+                                          receiverCount: nextReceiverCount,
+                                        };
+                                        const payloadItems = buildApprovalItems(normalizedSchedule);
+                                        if (normalizedSchedule.businessDate) {
                                           saveApprovalOverrides({
                                             restaurantId,
-                                            payoutScheduleId: updatedSchedule.payoutScheduleId,
-                                            businessDate: updatedSchedule.businessDate,
+                                            payoutScheduleId: normalizedSchedule.payoutScheduleId,
+                                            businessDate: normalizedSchedule.businessDate,
                                             items: payloadItems,
                                           });
                                         }
-                                        return updatedSchedule;
+                                        return normalizedSchedule;
                                       }),
                                     );
                                     setEditingScheduleKey(null);
@@ -1165,6 +1754,11 @@ export default function Reconciliation() {
                                     setAddMemberSelections({});
                                     setAddMemberDropdowns({});
                                     setAddMemberSlots({});
+                                    setCustomReceivers((current) => ({
+                                      ...current,
+                                      [scheduleKey]: [],
+                                    }));
+                                    setCustomReceiverDropdowns({});
                                   }}
                                   className="rounded-lg bg-[#cab99a] px-4 py-2 text-sm font-semibold text-black shadow-md transition hover:bg-[#bfa986] hover:shadow-lg"
                                 >
@@ -1175,13 +1769,24 @@ export default function Reconciliation() {
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     setEditingScheduleKey(null);
-                                    setActiveScheduleKey(null);
+                                    setExpandedScheduleKeys(new Set());
                                     setExpandedEmployees({});
                                     setResetToken((current) => current + 1);
                                     setPayoutEdits({});
                                     setAddMemberSelections({});
                                     setAddMemberDropdowns({});
                                     setAddMemberSlots({});
+                                    setCustomReceivers((current) => ({
+                                      ...current,
+                                      [scheduleKey]: [],
+                                    }));
+                                    setCustomReceiverDropdowns({});
+                                    requestAnimationFrame(() => {
+                                      const target = scheduleRefs.current[scheduleKey];
+                                      if (target) {
+                                        target.scrollIntoView({ behavior: "smooth", block: "start" });
+                                      }
+                                    });
                                   }}
                                   className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm transition hover:bg-gray-50"
                                 >

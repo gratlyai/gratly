@@ -19,6 +19,7 @@ export type ApprovalContributor = {
   overallGratuity: number;
   payoutTips: number;
   payoutGratuity: number;
+  orderCount?: number;
 };
 
 export type ApprovalScheduleWithContributors = {
@@ -38,6 +39,7 @@ export type ApprovalScheduleWithContributors = {
   netSales: number;
   totalTips: number;
   totalGratuity: number;
+  orderCount: number;
   contributorCount: number;
   receiverCount: number;
   isApproved?: boolean;
@@ -82,6 +84,7 @@ export type ApprovalFinalizePayload = {
   restaurantId: number;
   payoutScheduleId: number;
   businessDate: string;
+  userId: number;
 };
 
 export async function fetchApprovals(restaurantId: number): Promise<ApprovalsResponse> {
