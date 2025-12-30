@@ -87,6 +87,13 @@ export type ApprovalFinalizePayload = {
   userId: number;
 };
 
+export type ApprovalFinalizeResponse = {
+  success: boolean;
+  approval_id?: number;
+  is_approved?: boolean;
+  already_approved?: boolean;
+};
+
 export async function fetchApprovals(restaurantId: number): Promise<ApprovalsResponse> {
   try {
     return await api.get<ApprovalsResponse>(`/approvals?restaurant_id=${restaurantId}`);
@@ -104,10 +111,13 @@ export async function saveApprovalOverrides(payload: ApprovalOverridePayload): P
   }
 }
 
-export async function approvePayoutSchedule(payload: ApprovalFinalizePayload): Promise<void> {
+export async function approvePayoutSchedule(
+  payload: ApprovalFinalizePayload,
+): Promise<ApprovalFinalizeResponse | null> {
   try {
-    await api.post("/approvals/approve", payload);
+    return await api.post<ApprovalFinalizeResponse>("/approvals/approve", payload);
   } catch (error) {
     console.warn("Failed to approve payout schedule:", error);
+    return null;
   }
 }

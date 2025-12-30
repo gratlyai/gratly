@@ -7,6 +7,7 @@ import {
 } from "../api/approvals";
 import { fetchActiveEmployeesByJobTitle, type EmployeeWithJob } from "../api/employees";
 import { fetchJobTitles } from "../api/jobs";
+import { createRestaurantDebit } from "../api/payments";
 
 type CustomReceiverEntry = {
   id: string;
@@ -535,12 +536,23 @@ export default function Reconciliation() {
                             businessDate: schedule.businessDate,
                             items: payloadItems,
                           });
-                          await approvePayoutSchedule({
+                          const approvalResponse = await approvePayoutSchedule({
                             restaurantId,
                             payoutScheduleId: schedule.payoutScheduleId,
                             businessDate: schedule.businessDate,
                             userId,
                           });
+                          if (approvalResponse?.approval_id && !approvalResponse.already_approved) {
+                            try {
+                              await createRestaurantDebit({
+                                settlementId: String(approvalResponse.approval_id),
+                                restaurantId,
+                                businessDate: schedule.businessDate,
+                              });
+                            } catch (error) {
+                              console.warn("Failed to debit restaurant for approved payout:", error);
+                            }
+                          }
                           setApprovedScheduleKeys((current) => {
                             const next = new Set(current);
                             next.add(scheduleKey);

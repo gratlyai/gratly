@@ -756,7 +756,12 @@ def approve_payout_schedule(payload: ApprovalFinalizePayload):
         if not row:
             raise HTTPException(status_code=404, detail="Approval record not found")
         if int(row.get("is_approved") or 0) == 1:
-            return {"success": True, "approval_id": row["approval_id"], "is_approved": True}
+            return {
+                "success": True,
+                "approval_id": row["approval_id"],
+                "is_approved": True,
+                "already_approved": True,
+            }
 
         cursor.execute(
             """
@@ -817,7 +822,28 @@ def approve_payout_schedule(payload: ApprovalFinalizePayload):
             (payload.userId, row["approval_id"]),
         )
         conn.commit()
-        return {"success": True, "approval_id": row["approval_id"], "is_approved": True}
+        debit_result = None
+        debit_error = None
+        try:
+            try:
+                from Backend.stripe_payments import _create_restaurant_debit_for_settlement
+            except ImportError:
+                from stripe_payments import _create_restaurant_debit_for_settlement
+            debit_result = _create_restaurant_debit_for_settlement(
+                settlement_id=str(row["approval_id"]),
+                restaurant_id=int(payload.restaurantId),
+                business_date=payload.businessDate,
+            )
+        except Exception as exc:
+            debit_error = str(exc)
+        return {
+            "success": True,
+            "approval_id": row["approval_id"],
+            "is_approved": True,
+            "already_approved": False,
+            "debit": debit_result,
+            "debit_error": debit_error,
+        }
     except pymysql.MySQLError as err:
         conn.rollback()
         raise HTTPException(status_code=500, detail=f"Error approving payout: {err}")

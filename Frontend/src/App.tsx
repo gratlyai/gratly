@@ -11,6 +11,7 @@ import GratlyShiftPayout from "./GratlyShiftPayout";
 import GratlyProfile from "./GratlyProfile";
 import PasswordReset from "./pages/PasswordReset";
 import PasswordResetForm from "./pages/PasswordResetForm";
+import Subscription from "./pages/Subscription";
 import { PrivateRoute } from "./auth/PrivateRoute";
 import AppLayout from "./layouts/AppLayout";
 
@@ -38,6 +39,7 @@ export default function App() {
         <Route path="reports" element={<Reports />} />
         <Route path="settings" element={<Settings />} />
         <Route path="profile" element={<GratlyProfile />} />
+        <Route path="subscription" element={<Subscription />} />
       </Route>
       <Route
         path="/employees/:employeeId"

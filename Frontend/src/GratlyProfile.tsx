@@ -1,6 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams } from "react-router-dom";
 import { fetchUserProfile, updateUserProfile } from "./api/users";
+import {
+  createOrFetchStripeConnectedAccount,
+  createStripeOnboardingLink,
+  fetchStripeConnectedAccount,
+  fetchEmployees,
+  type StripeConnectedAccount,
+} from "./api/employees";
 import { getStoredPermissions, permissionConfig, type PermissionState } from "./auth/permissions";
 
 interface UserProfile {
@@ -44,6 +51,10 @@ const GratlyProfilePage: React.FC = () => {
   const [showSavedToast, setShowSavedToast] = useState<boolean>(false);
   const [saveError, setSaveError] = useState<string>("");
   const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [employeeGuid, setEmployeeGuid] = useState<string | null>(null);
+  const [stripeAccount, setStripeAccount] = useState<StripeConnectedAccount | null>(null);
+  const [isCreatingStripeAccount, setIsCreatingStripeAccount] = useState<boolean>(false);
+  const [stripeError, setStripeError] = useState<string>("");
   const initials =
     [profile.firstName, profile.lastName]
       .map((value) => value.trim())
@@ -65,6 +76,58 @@ const GratlyProfilePage: React.FC = () => {
       }
     };
     loadLogo();
+  }, []);
+
+  useEffect(() => {
+    const storedUserId = localStorage.getItem("userId");
+    if (!storedUserId) {
+      return;
+    }
+    const numericUserId = Number(storedUserId);
+    if (!Number.isFinite(numericUserId)) {
+      return;
+    }
+    let isMounted = true;
+    fetchEmployees()
+      .then((employees) => {
+        if (!isMounted) {
+          return;
+        }
+        const match = employees.find((entry) => entry.userId === numericUserId);
+        const nextEmployeeGuid = match?.employeeGuid ?? null;
+        setEmployeeGuid(nextEmployeeGuid);
+        if (!nextEmployeeGuid) {
+          return;
+        }
+        fetchStripeConnectedAccount(nextEmployeeGuid)
+          .then((summary) => {
+            if (!isMounted || !summary?.accountId) {
+              return;
+            }
+            setStripeAccount({
+              accountId: summary.accountId,
+              created: false,
+              chargesEnabled: summary.chargesEnabled ?? false,
+              payoutsEnabled: summary.payoutsEnabled ?? false,
+              detailsSubmitted: summary.detailsSubmitted ?? false,
+              disabledReason: summary.disabledReason ?? null,
+              accountDeauthorized: summary.accountDeauthorized ?? false,
+            });
+          })
+          .catch(() => {
+            if (isMounted) {
+              setStripeAccount(null);
+            }
+          });
+      })
+      .catch(() => {
+        if (isMounted) {
+          setEmployeeGuid(null);
+        }
+      });
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -164,6 +227,30 @@ const GratlyProfilePage: React.FC = () => {
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const handleStripeAccountCreate = async () => {
+    if (!employeeGuid) {
+      setStripeError("Employee GUID is required to create a Stripe account.");
+      return;
+    }
+    setStripeError("");
+    setIsCreatingStripeAccount(true);
+    const response = await createOrFetchStripeConnectedAccount(employeeGuid);
+    if (!response) {
+      setStripeError("Unable to create Stripe connected account.");
+      setIsCreatingStripeAccount(false);
+      return;
+    }
+    setStripeAccount(response);
+
+    const onboardingLink = await createStripeOnboardingLink(employeeGuid);
+    if (!onboardingLink?.url) {
+      setStripeError("Unable to start Stripe onboarding.");
+      setIsCreatingStripeAccount(false);
+      return;
+    }
+    window.location.assign(onboardingLink.url);
   };
 
   useEffect(() => {
@@ -382,6 +469,52 @@ const GratlyProfilePage: React.FC = () => {
             </div>
           </div>
         )}
+
+        {!isLoadingProfile ? (
+          <div className="bg-white rounded-xl shadow-md border border-gray-200 p-6 mt-6">
+            <h3 className="text-lg font-bold text-gray-900 mb-4">Stripe Account Details</h3>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between rounded-lg bg-gray-50 px-4 py-3 text-sm">
+                <span className="font-medium text-gray-900">Connected account</span>
+                <span
+                  className={`text-xs font-semibold ${
+                    stripeAccount ? "text-emerald-600" : "text-gray-500"
+                  }`}
+                >
+                  {stripeAccount ? "Connected" : "Not created"}
+                </span>
+              </div>
+              {stripeAccount ? (
+                <div className="rounded-lg bg-gray-50 px-4 py-3 text-xs text-gray-600">
+                  <p>Charges enabled: {stripeAccount.chargesEnabled ? "Yes" : "No"}</p>
+                  <p>Payouts enabled: {stripeAccount.payoutsEnabled ? "Yes" : "No"}</p>
+                  <p>Details submitted: {stripeAccount.detailsSubmitted ? "Yes" : "No"}</p>
+                  {stripeAccount.accountDeauthorized ? (
+                    <p>Account deauthorized: Yes</p>
+                  ) : null}
+                  {stripeAccount.disabledReason ? (
+                    <p>Disabled reason: {stripeAccount.disabledReason}</p>
+                  ) : null}
+                  <p className="break-all">Account ID: {stripeAccount.accountId}</p>
+                </div>
+              ) : null}
+              <div className="flex items-center justify-between rounded-lg bg-gray-50 px-4 py-3 text-sm">
+                <span className="font-medium text-gray-900">Start onboarding to receive payouts</span>
+                <button
+                  type="button"
+                  onClick={handleStripeAccountCreate}
+                  disabled={isCreatingStripeAccount || !employeeGuid}
+                  className="text-xs font-semibold text-gray-900 hover:text-gray-700 disabled:cursor-not-allowed disabled:text-gray-400"
+                >
+                  {isCreatingStripeAccount ? "Starting..." : "Start"}
+                </button>
+              </div>
+              {stripeError ? (
+                <p className="text-xs font-semibold text-red-600">{stripeError}</p>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
 
         {/* Additional Info Card */}
         <div className="bg-white rounded-xl shadow-md border border-gray-200 p-6 mt-6">

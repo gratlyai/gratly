@@ -17,6 +17,30 @@ export type EmployeeWithJob = {
   jobTitle: string | null;
 };
 
+export type StripeConnectedAccount = {
+  accountId: string;
+  created: boolean;
+  chargesEnabled: boolean;
+  payoutsEnabled: boolean;
+  detailsSubmitted: boolean;
+  disabledReason?: string | null;
+  accountDeauthorized?: boolean;
+};
+
+export type StripeConnectedAccountSummary = {
+  accountId: string | null;
+  chargesEnabled?: boolean;
+  payoutsEnabled?: boolean;
+  detailsSubmitted?: boolean;
+  disabledReason?: string | null;
+  accountDeauthorized?: boolean;
+};
+
+export type StripeOnboardingLink = {
+  url: string;
+  expiresAt: number | null;
+};
+
 export async function fetchEmployees(): Promise<Employee[]> {
   try {
     return await api.get<Employee[]>("/employees");
@@ -43,5 +67,44 @@ export async function fetchActiveEmployeesByJobTitle(
   } catch (error) {
     console.warn("Failed to load active employees by job:", error);
     return [];
+  }
+}
+
+export async function createOrFetchStripeConnectedAccount(
+  employeeGuid: string,
+): Promise<StripeConnectedAccount | null> {
+  try {
+    return await api.post<StripeConnectedAccount>(
+      `/employees/${employeeGuid}/stripe-connected-account`,
+    );
+  } catch (error) {
+    console.warn("Failed to create or fetch Stripe connected account:", error);
+    return null;
+  }
+}
+
+export async function fetchStripeConnectedAccount(
+  employeeGuid: string,
+): Promise<StripeConnectedAccountSummary | null> {
+  try {
+    return await api.get<StripeConnectedAccountSummary>(
+      `/employees/${employeeGuid}/stripe-connected-account`,
+    );
+  } catch (error) {
+    console.warn("Failed to fetch Stripe connected account:", error);
+    return null;
+  }
+}
+
+export async function createStripeOnboardingLink(
+  employeeGuid: string,
+): Promise<StripeOnboardingLink | null> {
+  try {
+    return await api.post<StripeOnboardingLink>(
+      `/employees/${employeeGuid}/stripe-onboarding-link`,
+    );
+  } catch (error) {
+    console.warn("Failed to create Stripe onboarding link:", error);
+    return null;
   }
 }

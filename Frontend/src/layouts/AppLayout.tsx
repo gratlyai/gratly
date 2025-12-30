@@ -328,12 +328,18 @@ const AppLayout: React.FC = () => {
               >
                 Profile
               </Link>
-              <button
-                type="button"
-                className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
-              >
-                Subscription
-              </button>
+              {restaurantKey ? (
+                <button
+                  type="button"
+                  className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
+                  onClick={() => {
+                    setIsUserMenuOpen(false);
+                    navigate(`${basePath}/subscription`);
+                  }}
+                >
+                  Subscription
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"

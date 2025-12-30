@@ -4,10 +4,10 @@ import pymysql
 from pydantic import BaseModel
 from typing import List, Optional
 
-try:
-    from Backend.security import hash_password, verify_password
-    from Backend.email_utils import send_sendgrid_email
-    from Backend.db import (
+if __package__:
+    from .security import hash_password, verify_password
+    from .email_utils import send_sendgrid_email
+    from .db import (
         _get_cursor,
         _fetch_restaurant_key,
         _fetch_restaurant_name,
@@ -18,11 +18,14 @@ try:
         _fetch_restaurant_id_for_email,
         _get_env_or_ini,
     )
-    from Backend.payout_schedules import router as payout_schedules_router
-    from Backend.password_reset import router as password_reset_router
-    from Backend.approvals import router as approvals_router
-    from Backend.reports import router as reports_router
-except ImportError:
+    from .payout_schedules import router as payout_schedules_router
+    from .password_reset import router as password_reset_router
+    from .approvals import router as approvals_router
+    from .reports import router as reports_router
+    from .stripe_payments import router as stripe_payments_router
+else:
+    from security import hash_password, verify_password
+    from email_utils import send_sendgrid_email
     from db import (
         _get_cursor,
         _fetch_restaurant_key,
@@ -38,8 +41,7 @@ except ImportError:
     from password_reset import router as password_reset_router
     from approvals import router as approvals_router
     from reports import router as reports_router
-    from security import hash_password, verify_password
-    from email_utils import send_sendgrid_email
+    from stripe_payments import router as stripe_payments_router
 
 app = FastAPI()
 
@@ -61,6 +63,7 @@ app.include_router(payout_schedules_router)
 app.include_router(password_reset_router)
 app.include_router(approvals_router)
 app.include_router(reports_router)
+app.include_router(stripe_payments_router)
 
 print("DB HOST:", _get_env_or_ini("DB_HOST"))
 print("DB USER:", _get_env_or_ini("DB_USER"))
@@ -637,10 +640,10 @@ def signup(data: dict):
     # ✅ Insert into database
     cursor.execute(
         """
-        INSERT INTO USER_MASTER (FIRSTNAME, LASTNAME, EMAIL, PHONENUMBER, PASSWORD_HASH)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO USER_MASTER (FIRSTNAME, LASTNAME, EMAIL, PHONENUMBER, PASSWORD_HASH, USERSTATUS)
+        VALUES (%s, %s, %s, %s, %s, %s)
         """,
-        (firstname, lastname, email, phonenumber, password_hash)
+        (firstname, lastname, email, phonenumber, password_hash, 1)
     )
 
     user_id = cursor.lastrowid

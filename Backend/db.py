@@ -51,6 +51,235 @@ try:
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS STRIPE_CONNECTED_ACCOUNTS (
+            RESTAURANTGUID VARCHAR(36),
+            EMPLOYEEGUID VARCHAR(64) NOT NULL PRIMARY KEY,
+            STRIPE_ACCOUNT_ID VARCHAR(64) NOT NULL,
+            CREATEDAT TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UPDATEDAT TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        )
+    """)
+
+    def _ensure_column(table: str, column: str, ddl: str) -> None:
+        cursor.execute(
+            """
+            SELECT 1
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = %s
+              AND TABLE_NAME = %s
+              AND COLUMN_NAME = %s
+            """,
+            ("GRATLYDB", table, column),
+        )
+        if not cursor.fetchone():
+            cursor.execute(f"ALTER TABLE GRATLYDB.{table} ADD COLUMN {ddl}")
+
+    def _ensure_index(table: str, index_name: str, columns: str) -> None:
+        cursor.execute(
+            """
+            SELECT 1
+            FROM information_schema.STATISTICS
+            WHERE TABLE_SCHEMA = %s
+              AND TABLE_NAME = %s
+              AND INDEX_NAME = %s
+            """,
+            ("GRATLYDB", table, index_name),
+        )
+        if not cursor.fetchone():
+            cursor.execute(f"CREATE INDEX {index_name} ON GRATLYDB.{table} ({columns})")
+
+    _ensure_column(
+        "STRIPE_CONNECTED_ACCOUNTS",
+        "CHARGES_ENABLED",
+        "CHARGES_ENABLED TINYINT(1) DEFAULT 0",
+    )
+    _ensure_column(
+        "STRIPE_CONNECTED_ACCOUNTS",
+        "PAYOUTS_ENABLED",
+        "PAYOUTS_ENABLED TINYINT(1) DEFAULT 0",
+    )
+    _ensure_column(
+        "STRIPE_CONNECTED_ACCOUNTS",
+        "DETAILS_SUBMITTED",
+        "DETAILS_SUBMITTED TINYINT(1) DEFAULT 0",
+    )
+    _ensure_column(
+        "STRIPE_CONNECTED_ACCOUNTS",
+        "DISABLED_REASON",
+        "DISABLED_REASON VARCHAR(255)",
+    )
+    _ensure_column(
+        "STRIPE_CONNECTED_ACCOUNTS",
+        "ACCOUNT_DEAUTHORIZED",
+        "ACCOUNT_DEAUTHORIZED TINYINT(1) DEFAULT 0",
+    )
+    _ensure_column(
+        "STRIPE_CONNECTED_ACCOUNTS",
+        "RESTAURANTGUID",
+        "RESTAURANTGUID VARCHAR(36) FIRST",
+    )
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS STRIPE_PAYMENT_EVENTS (
+            RESTAURANTGUID VARCHAR(36),
+            EVENT_ID VARCHAR(255) NOT NULL PRIMARY KEY,
+            EVENT_TYPE VARCHAR(128) NOT NULL,
+            PAYMENT_INTENT_ID VARCHAR(255),
+            EMPLOYEEGUID VARCHAR(64),
+            AMOUNT BIGINT,
+            CURRENCY VARCHAR(16),
+            STATUS VARCHAR(64),
+            CREATED_AT DATETIME,
+            RAW_PAYLOAD JSON
+        )
+    """)
+    _ensure_index("STRIPE_PAYMENT_EVENTS", "IDX_STRIPE_PAYMENT_EMPLOYEE", "EMPLOYEEGUID")
+    _ensure_index("STRIPE_PAYMENT_EVENTS", "IDX_STRIPE_PAYMENT_RESTAURANT", "RESTAURANTGUID")
+    _ensure_index("STRIPE_PAYMENT_EVENTS", "IDX_STRIPE_PAYMENT_INTENT", "PAYMENT_INTENT_ID")
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS STRIPE_DISPUTE_EVENTS (
+            RESTAURANTGUID VARCHAR(36),
+            EVENT_ID VARCHAR(255) NOT NULL PRIMARY KEY,
+            EVENT_TYPE VARCHAR(128) NOT NULL,
+            DISPUTE_ID VARCHAR(255),
+            CHARGE_ID VARCHAR(255),
+            EMPLOYEEGUID VARCHAR(64),
+            AMOUNT BIGINT,
+            CURRENCY VARCHAR(16),
+            STATUS VARCHAR(64),
+            REASON VARCHAR(255),
+            CREATED_AT DATETIME,
+            RAW_PAYLOAD JSON
+        )
+    """)
+    _ensure_index("STRIPE_DISPUTE_EVENTS", "IDX_STRIPE_DISPUTE_EMPLOYEE", "EMPLOYEEGUID")
+    _ensure_index("STRIPE_DISPUTE_EVENTS", "IDX_STRIPE_DISPUTE_RESTAURANT", "RESTAURANTGUID")
+    _ensure_index("STRIPE_DISPUTE_EVENTS", "IDX_STRIPE_DISPUTE_CHARGE", "CHARGE_ID")
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS STRIPE_BALANCE_EVENTS (
+            RESTAURANTGUID VARCHAR(36),
+            EVENT_ID VARCHAR(255) NOT NULL PRIMARY KEY,
+            EVENT_TYPE VARCHAR(128) NOT NULL,
+            CREATED_AT DATETIME,
+            RAW_PAYLOAD JSON
+        )
+    """)
+    _ensure_column(
+        "STRIPE_BALANCE_EVENTS",
+        "RESTAURANTGUID",
+        "RESTAURANTGUID VARCHAR(36) FIRST",
+    )
+    _ensure_index("STRIPE_BALANCE_EVENTS", "IDX_STRIPE_BALANCE_CREATED", "CREATED_AT")
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS STRIPE_TRANSFER_EVENTS (
+            RESTAURANTGUID VARCHAR(36),
+            EVENT_ID VARCHAR(255) NOT NULL PRIMARY KEY,
+            EVENT_TYPE VARCHAR(128) NOT NULL,
+            TRANSFER_ID VARCHAR(255),
+            EMPLOYEEGUID VARCHAR(64),
+            AMOUNT BIGINT,
+            CURRENCY VARCHAR(16),
+            STATUS VARCHAR(64),
+            DESTINATION_ACCOUNT VARCHAR(255),
+            CREATED_AT DATETIME,
+            RAW_PAYLOAD JSON
+        )
+    """)
+    _ensure_index("STRIPE_TRANSFER_EVENTS", "IDX_STRIPE_TRANSFER_EMPLOYEE", "EMPLOYEEGUID")
+    _ensure_index("STRIPE_TRANSFER_EVENTS", "IDX_STRIPE_TRANSFER_RESTAURANT", "RESTAURANTGUID")
+    _ensure_index("STRIPE_TRANSFER_EVENTS", "IDX_STRIPE_TRANSFER_ID", "TRANSFER_ID")
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS STRIPE_PAYOUT_EVENTS (
+            RESTAURANTGUID VARCHAR(36),
+            EVENT_ID VARCHAR(255) NOT NULL PRIMARY KEY,
+            EVENT_TYPE VARCHAR(128) NOT NULL,
+            PAYOUT_ID VARCHAR(255),
+            EMPLOYEEGUID VARCHAR(64),
+            AMOUNT BIGINT,
+            CURRENCY VARCHAR(16),
+            STATUS VARCHAR(64),
+            ARRIVAL_DATE BIGINT,
+            PAYOUT_METHOD VARCHAR(32),
+            DESTINATION VARCHAR(255),
+            ACCOUNT_ID VARCHAR(255),
+            CREATED_AT DATETIME,
+            RAW_PAYLOAD JSON
+        )
+    """)
+    _ensure_index("STRIPE_PAYOUT_EVENTS", "IDX_STRIPE_PAYOUT_EMPLOYEE", "EMPLOYEEGUID")
+    _ensure_index("STRIPE_PAYOUT_EVENTS", "IDX_STRIPE_PAYOUT_RESTAURANT", "RESTAURANTGUID")
+    _ensure_index("STRIPE_PAYOUT_EVENTS", "IDX_STRIPE_PAYOUT_ID", "PAYOUT_ID")
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS STRIPE_RESTAURANT_SETTINGS (
+            RESTAURANTGUID VARCHAR(36),
+            RESTAURANTID INT NOT NULL PRIMARY KEY,
+            STRIPE_CUSTOMER_ID VARCHAR(255),
+            US_BANK_PAYMENT_METHOD_ID VARCHAR(255),
+            BANK_LAST4 VARCHAR(8),
+            BANK_NAME VARCHAR(255),
+            UPDATED_AT DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                ON UPDATE CURRENT_TIMESTAMP
+        )
+    """)
+    _ensure_column(
+        "STRIPE_RESTAURANT_SETTINGS",
+        "BANK_LAST4",
+        "BANK_LAST4 VARCHAR(8)",
+    )
+    _ensure_column(
+        "STRIPE_RESTAURANT_SETTINGS",
+        "BANK_NAME",
+        "BANK_NAME VARCHAR(255)",
+    )
+    _ensure_column(
+        "STRIPE_RESTAURANT_SETTINGS",
+        "RESTAURANTGUID",
+        "RESTAURANTGUID VARCHAR(36) FIRST",
+    )
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS STRIPE_EMPLOYEE_CARRY_FORWARD (
+            RESTAURANTGUID VARCHAR(36),
+            EMPLOYEEGUID VARCHAR(64) NOT NULL,
+            RESTAURANTID INT NOT NULL,
+            CARRY_FORWARD_CENTS BIGINT NOT NULL DEFAULT 0,
+            UPDATED_AT DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (EMPLOYEEGUID, RESTAURANTID)
+        )
+    """)
+    _ensure_column(
+        "STRIPE_EMPLOYEE_CARRY_FORWARD",
+        "RESTAURANTGUID",
+        "RESTAURANTGUID VARCHAR(36) FIRST",
+    )
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS STRIPE_SETTLEMENT_TRANSFERS (
+            RESTAURANTGUID VARCHAR(36),
+            SETTLEMENT_ID VARCHAR(64) NOT NULL,
+            EMPLOYEEGUID VARCHAR(64) NOT NULL,
+            TRANSFER_ID VARCHAR(255) NOT NULL,
+            AMOUNT_CENTS BIGINT NOT NULL,
+            FEE_CENTS BIGINT NOT NULL,
+            CARRY_FORWARD_CENTS BIGINT NOT NULL DEFAULT 0,
+            CREATED_AT DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (SETTLEMENT_ID, EMPLOYEEGUID)
+        )
+    """)
+    _ensure_index("STRIPE_SETTLEMENT_TRANSFERS", "IDX_STRIPE_SETTLEMENT_TRANSFER_ID", "TRANSFER_ID")
+    _ensure_column(
+        "STRIPE_SETTLEMENT_TRANSFERS",
+        "RESTAURANTGUID",
+        "RESTAURANTGUID VARCHAR(36) FIRST",
+    )
+
     db.commit()
     cursor.close()
     db.close()
