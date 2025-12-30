@@ -1,4 +1,5 @@
-import { Routes, Route } from "react-router-dom";
+import type { ReactNode } from "react";
+import { Navigate, Routes, Route, useParams } from "react-router-dom";
 import GratlyLogin from "./GratlyLogin";
 import GratlySignUp from "./GratlySignUp";
 import GratlyHome from "./GratlyHome";
@@ -14,6 +15,19 @@ import PasswordResetForm from "./pages/PasswordResetForm";
 import Subscription from "./pages/Subscription";
 import { PrivateRoute } from "./auth/PrivateRoute";
 import AppLayout from "./layouts/AppLayout";
+import { getStoredPermissions } from "./auth/permissions";
+
+const AdminRoute = ({ children }: { children: ReactNode }) => {
+  const { restaurantKey } = useParams();
+  const storedUserId = localStorage.getItem("userId") || "";
+  const permissions = getStoredPermissions(storedUserId);
+  const isAdminUser = permissions.adminAccess;
+  if (!isAdminUser) {
+    const fallbackPath = restaurantKey ? `/business/${restaurantKey}/home` : "/login";
+    return <Navigate to={fallbackPath} replace />;
+  }
+  return <>{children}</>;
+};
 
 export default function App() {
   return (
@@ -39,7 +53,14 @@ export default function App() {
         <Route path="reports" element={<Reports />} />
         <Route path="settings" element={<Settings />} />
         <Route path="profile" element={<GratlyProfile />} />
-        <Route path="subscription" element={<Subscription />} />
+        <Route
+          path="subscription"
+          element={
+            <AdminRoute>
+              <Subscription />
+            </AdminRoute>
+          }
+        />
       </Route>
       <Route
         path="/employees/:employeeId"

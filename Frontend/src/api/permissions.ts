@@ -8,6 +8,13 @@ export async function fetchUserPermissions(userId: number): Promise<PermissionSt
 export async function updateUserPermissions(
   userId: number,
   permissions: PermissionState,
+  actorUserId?: number | null,
 ): Promise<PermissionState> {
-  return api.put<PermissionState>(`/user-permissions/${userId}`, permissions);
+  const params = new URLSearchParams();
+  if (actorUserId) {
+    params.set("actor_user_id", String(actorUserId));
+  }
+  const query = params.toString();
+  const url = query ? `/user-permissions/${userId}?${query}` : `/user-permissions/${userId}`;
+  return api.put<PermissionState>(url, permissions);
 }

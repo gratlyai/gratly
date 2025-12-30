@@ -270,7 +270,7 @@ const GratlyFormsSystem: React.FC = () => {
       }
     };
     fetchJobTitles();
-  }, [userId]);
+  }, [restaurantKey, userId]);
 
   useEffect(() => {
     setTipPercentages((prev) => {
@@ -345,7 +345,12 @@ const GratlyFormsSystem: React.FC = () => {
     setIsLoadingSchedules(true);
     setSchedulesError('');
     try {
-      const res = await fetch(`http://127.0.0.1:8000/payout-schedules?user_id=${userId}`);
+      const params = new URLSearchParams({ user_id: String(userId) });
+      const numericRestaurantId = Number(restaurantKey);
+      if (Number.isFinite(numericRestaurantId)) {
+        params.set('restaurant_id', String(numericRestaurantId));
+      }
+      const res = await fetch(`http://127.0.0.1:8000/payout-schedules?${params.toString()}`);
       if (!res.ok) {
         throw new Error(`Failed to fetch schedules (${res.status})`);
       }

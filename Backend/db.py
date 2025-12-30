@@ -3,7 +3,7 @@ import pymysql
 import os
 from dotenv import load_dotenv
 import configparser
-from typing import Optional
+from typing import Iterable, List, Optional
 
 load_dotenv()
 
@@ -317,6 +317,20 @@ def _fetch_restaurant_key(user_id: int) -> Optional[int]:
             (user_id,),
         )
         row = cursor.fetchone()
+        if row and row.get("restaurant_id") is not None:
+            return row["restaurant_id"]
+        cursor.execute(
+            """
+            SELECT ob.RESTAURANTID AS restaurant_id
+            FROM GRATLYDB.USER_MASTER um
+            JOIN GRATLYDB.SRC_EMPLOYEES se ON se.EMAIL = um.EMAIL
+            JOIN GRATLYDB.SRC_ONBOARDING ob ON se.RESTAURANTGUID = ob.RESTAURANTGUID
+            WHERE um.USERID = %s
+            LIMIT 1
+            """,
+            (user_id,),
+        )
+        row = cursor.fetchone()
         return row["restaurant_id"] if row else None
     finally:
         cursor.close()
@@ -331,6 +345,21 @@ def _fetch_restaurant_name(user_id: int) -> Optional[str]:
             JOIN GRATLYDB.SRC_ONBOARDING ob ON ur.RESTAURANTID = ob.RESTAURANTID
             JOIN GRATLYDB.SRC_RESTAURANTDETAILS rd ON rd.RESTAURANTGUID = ob.RESTAURANTGUID
             WHERE ur.USERID = %s
+            LIMIT 1
+            """,
+            (user_id,),
+        )
+        row = cursor.fetchone()
+        if row and row.get("restaurant_name"):
+            return row["restaurant_name"]
+        cursor.execute(
+            """
+            SELECT rd.RESTAURANTNAME AS restaurant_name
+            FROM GRATLYDB.USER_MASTER um
+            JOIN GRATLYDB.SRC_EMPLOYEES se ON se.EMAIL = um.EMAIL
+            JOIN GRATLYDB.SRC_ONBOARDING ob ON se.RESTAURANTGUID = ob.RESTAURANTGUID
+            JOIN GRATLYDB.SRC_RESTAURANTDETAILS rd ON rd.RESTAURANTGUID = ob.RESTAURANTGUID
+            WHERE um.USERID = %s
             LIMIT 1
             """,
             (user_id,),
@@ -354,27 +383,74 @@ def _fetch_restaurant_guid(user_id: int) -> Optional[str]:
             (user_id,),
         )
         row = cursor.fetchone()
-        return row["restaurant_guid"] if row else None
-    finally:
-        cursor.close()
-
-def _fetch_user_permission_flags(user_id: int) -> Optional[dict]:
-    cursor = _get_cursor(dictionary=True)
-    try:
+        if row and row.get("restaurant_guid"):
+            return row["restaurant_guid"]
         cursor.execute(
             """
-            SELECT
-                ISADMIN AS isAdmin,
-                ISEMPLOYEE AS isEmployee
-            FROM GRATLYDB.USER_PERMISSIONS
-            WHERE USERID = %s
+            SELECT ob.RESTAURANTGUID AS restaurant_guid
+            FROM GRATLYDB.USER_MASTER um
+            JOIN GRATLYDB.SRC_EMPLOYEES se ON se.EMAIL = um.EMAIL
+            JOIN GRATLYDB.SRC_ONBOARDING ob ON se.RESTAURANTGUID = ob.RESTAURANTGUID
+            WHERE um.USERID = %s
             LIMIT 1
             """,
             (user_id,),
         )
-        return cursor.fetchone()
+        row = cursor.fetchone()
+        return row["restaurant_guid"] if row else None
     finally:
         cursor.close()
+
+PERMISSION_LABELS = {
+    "createPayoutSchedules": "Create Payout Schedules",
+    "approvePayouts": "Approve Payouts",
+    "manageTeam": "Manage Team",
+    "adminAccess": "Admin Access",
+    "employeeOnly": "Employee Only",
+    "managerAccess": "Manager Access",
+}
+
+PERMISSION_NAME_TO_KEY = {
+    label.strip().lower(): key for key, label in PERMISSION_LABELS.items()
+}
+
+def _normalize_permission_name(value: str) -> str:
+    return value.strip().lower()
+
+def _fetch_user_permission_names(user_id: int) -> List[str]:
+    cursor = _get_cursor(dictionary=True)
+    try:
+        cursor.execute(
+            """
+            SELECT mp.PERMISSIONSNAME AS permission_name
+            FROM GRATLYDB.USER_PERMISSIONS up
+            JOIN GRATLYDB.MSTR_PERMISSIONS mp ON up.PERMISSIONSID = mp.PERMISSIONSID
+            WHERE up.USERID = %s
+              AND (mp.DELETED IS NULL OR mp.DELETED = 0)
+            """,
+            (user_id,),
+        )
+        rows = cursor.fetchall()
+        return [row["permission_name"] for row in rows if row.get("permission_name")]
+    finally:
+        cursor.close()
+
+def _fetch_user_permission_flags(user_id: int) -> Optional[dict]:
+    permission_names = _fetch_user_permission_names(user_id)
+    permissions = _serialize_permissions(permission_names)
+    if permissions is None:
+        return None
+    has_business_access = bool(
+        permissions.get("adminAccess")
+        or permissions.get("managerAccess")
+        or permissions.get("createPayoutSchedules")
+        or permissions.get("approvePayouts")
+        or permissions.get("manageTeam")
+    )
+    return {
+        "isAdmin": has_business_access,
+        "isEmployee": bool(permissions.get("employeeOnly")),
+    }
 
 def _fetch_employee_guid_for_user(user_id: int) -> Optional[str]:
     cursor = _get_cursor(dictionary=True)
@@ -395,16 +471,17 @@ def _fetch_employee_guid_for_user(user_id: int) -> Optional[str]:
     finally:
         cursor.close()
 
-def _serialize_permissions(row: Optional[dict]) -> Optional[dict]:
-    if not row:
+def _serialize_permissions(permission_names: Optional[Iterable[str]]) -> Optional[dict]:
+    if permission_names is None:
         return None
-    return {
-        "createPayoutSchedules": bool(row.get("isCreatePayoutSchedule")),
-        "approvePayouts": bool(row.get("isApprovePayout")),
-        "manageTeam": bool(row.get("isManageEmployees")),
-        "adminAccess": bool(row.get("isAdmin")),
-        "employeeOnly": bool(row.get("isEmployee")),
-    }
+    permissions = {key: False for key in PERMISSION_LABELS}
+    for name in permission_names:
+        if not name:
+            continue
+        key = PERMISSION_NAME_TO_KEY.get(_normalize_permission_name(name))
+        if key:
+            permissions[key] = True
+    return permissions
 
 def _fetch_restaurant_id_for_email(email: str) -> Optional[int]:
     cursor = _get_cursor(dictionary=True)

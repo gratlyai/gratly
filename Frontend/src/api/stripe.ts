@@ -11,6 +11,26 @@ export type PaymentMethodStatus = {
   paymentMethodId?: string;
   bankLast4?: string | null;
   bankName?: string | null;
+  card?: StripeCardSummary | null;
+  businessProfile?: StripeBusinessProfile | null;
+  capabilities?: Record<string, string> | null;
+  defaultCurrency?: string | null;
+};
+
+export type StripeCardSummary = {
+  brand?: string | null;
+  last4?: string | null;
+  expMonth?: number | null;
+  expYear?: number | null;
+  funding?: string | null;
+  country?: string | null;
+};
+
+export type StripeBusinessProfile = {
+  name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  address?: Record<string, string | null> | null;
 };
 
 export async function createRestaurantSetupIntent(restaurantId: number): Promise<SetupIntentResponse> {

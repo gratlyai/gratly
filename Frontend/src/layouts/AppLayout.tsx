@@ -7,13 +7,13 @@ import reportsLogo from "../assets/reportslogo.png";
 import teamLogo from "../assets/teamlogo.png";
 import settingsLogo from "../assets/settingslogo.png";
 import gratlyLogo from "../assets/gratlylogodash.png";
-import { getStoredPermissions, isOwner, type PermissionState } from "../auth/permissions";
+import { getStoredPermissions, type PermissionState } from "../auth/permissions";
 import { fetchUserPermissions } from "../api/permissions";
 
 type NavItem = {
   label: string;
   to: string;
-  permissionKey?: "home" | "approvals" | "shift-payout" | "team" | "reports" | "settings" | "profile";
+  permissionKey?: "home" | "approvals" | "shift-payout" | "team" | "reports" | "settings" | "profile" | "subscription";
   icon: React.ReactNode;
 };
 
@@ -65,9 +65,15 @@ const AppLayout: React.FC = () => {
       .join("") || "U";
   const activeEmployeeId = employeeId || storedUserId;
   const [permissions, setPermissions] = useState<PermissionState>(() =>
-    getStoredPermissions(activeEmployeeId, storedUserName),
+    getStoredPermissions(activeEmployeeId),
   );
-  const isAdminUser = permissions.adminAccess || isOwner(storedUserName);
+  const isAdminUser = permissions.adminAccess;
+  const isBusinessUser =
+    isAdminUser ||
+    permissions.managerAccess ||
+    permissions.createPayoutSchedules ||
+    permissions.approvePayouts ||
+    permissions.manageTeam;
   const businessBase = restaurantKey ? `/business/${restaurantKey}` : "/business";
   const employeeBase = activeEmployeeId ? `/employees/${activeEmployeeId}` : "/employees";
   const basePath = restaurantKey ? businessBase : employeeBase;
@@ -75,7 +81,7 @@ const AppLayout: React.FC = () => {
 
   useEffect(() => {
     let isMounted = true;
-    const nextPermissions = getStoredPermissions(activeEmployeeId, storedUserName);
+    const nextPermissions = getStoredPermissions(activeEmployeeId);
     if (isMounted) {
       setPermissions(nextPermissions);
     }
@@ -105,26 +111,26 @@ const AppLayout: React.FC = () => {
     if (!key) {
       return true;
     }
-    if (isAdminUser) {
-      return true;
-    }
-    if (!permissions.employeeOnly) {
-      return false;
-    }
     if (key === "home" || key === "reports") {
       return true;
     }
-    if (key === "approvals") {
-      return permissions.approvePayouts;
-    }
-    if (key === "shift-payout") {
-      return permissions.createPayoutSchedules;
-    }
-    if (key === "team") {
-      return permissions.manageTeam;
-    }
     if (key === "profile") {
       return true;
+    }
+    if (key === "subscription") {
+      return isAdminUser;
+    }
+    if (isAdminUser) {
+      return true;
+    }
+    if (key === "approvals") {
+      return permissions.managerAccess || permissions.approvePayouts;
+    }
+    if (key === "shift-payout") {
+      return permissions.managerAccess || permissions.createPayoutSchedules;
+    }
+    if (key === "team") {
+      return permissions.managerAccess || permissions.manageTeam;
     }
     if (key === "settings") {
       return false;
@@ -257,22 +263,22 @@ const AppLayout: React.FC = () => {
   const allowedNavItems = useMemo(() => navItems.filter((item) => canAccess(item.permissionKey)), [navItems, permissions, isAdminUser]);
 
   useEffect(() => {
-    if (!isAdminUser && restaurantKey && activeEmployeeId) {
+    if (!isBusinessUser && restaurantKey && activeEmployeeId) {
       navigate(`${employeeBase}/home`, { replace: true });
     }
-  }, [isAdminUser, restaurantKey, activeEmployeeId, employeeBase, navigate]);
+  }, [isBusinessUser, restaurantKey, activeEmployeeId, employeeBase, navigate]);
 
   useEffect(() => {
-    if (isAdminUser && !restaurantKey && storedRestaurantKey) {
+    if (isBusinessUser && !restaurantKey && storedRestaurantKey) {
       navigate(`/business/${storedRestaurantKey}/home`, { replace: true });
     }
-  }, [isAdminUser, restaurantKey, storedRestaurantKey, navigate]);
+  }, [isBusinessUser, restaurantKey, storedRestaurantKey, navigate]);
 
   useEffect(() => {
-    if (!isAdminUser && employeeId && storedUserId && employeeId !== storedUserId) {
+    if (!isBusinessUser && employeeId && storedUserId && employeeId !== storedUserId) {
       navigate(`${employeeBase}/home`, { replace: true });
     }
-  }, [isAdminUser, employeeId, storedUserId, employeeBase, navigate]);
+  }, [isBusinessUser, employeeId, storedUserId, employeeBase, navigate]);
 
   useEffect(() => {
     if (!location.pathname.startsWith(basePath)) {
@@ -328,7 +334,7 @@ const AppLayout: React.FC = () => {
               >
                 Profile
               </Link>
-              {restaurantKey ? (
+              {restaurantKey && canAccess("subscription") ? (
                 <button
                   type="button"
                   className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"

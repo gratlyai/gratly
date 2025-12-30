@@ -230,7 +230,14 @@ def create_payout_schedule(payload: PayoutSchedulePayload):
         cursor.close()
 
 @router.get("/payout-schedules", response_model=List[PayoutScheduleRow])
-def list_payout_schedules(user_id: int):
+def list_payout_schedules(user_id: Optional[int] = None, restaurant_id: Optional[int] = None):
+    resolved_restaurant_id = restaurant_id
+    if resolved_restaurant_id is None:
+        if user_id is None:
+            raise HTTPException(status_code=400, detail="Missing user_id or restaurant_id")
+        resolved_restaurant_id = _fetch_restaurant_key(user_id)
+    if not resolved_restaurant_id:
+        raise HTTPException(status_code=404, detail="Restaurant not found for user")
     cursor = _get_cursor(dictionary=True)
     try:
         cursor.execute(
@@ -244,10 +251,10 @@ def list_payout_schedules(user_id: int):
                 END_TIME AS end_time,
                 PAYOUT_RULE_ID AS payout_rule_id
             FROM GRATLYDB.PAYOUT_SCHEDULE
-            WHERE USERID = %s
+            WHERE RESTAURANTID = %s
             ORDER BY CREATEDDATE DESC
             """,
-            (user_id,),
+            (resolved_restaurant_id,),
         )
         rows = cursor.fetchall()
         return rows
@@ -258,6 +265,9 @@ def list_payout_schedules(user_id: int):
 
 @router.put("/payout-schedules/{schedule_id}")
 def update_payout_schedule(schedule_id: int, payload: PayoutSchedulePayload):
+    restaurant_id = _fetch_restaurant_key(payload.user_id)
+    if not restaurant_id:
+        raise HTTPException(status_code=404, detail="Restaurant not found for user")
     payout_rule_id = _map_payout_rule(payload.payout_rule)
     payout_triggers = payload.payout_triggers or {}
     gratuity_trigger = _parse_optional_float(payout_triggers.get("gratuity"))
@@ -282,9 +292,9 @@ def update_payout_schedule(schedule_id: int, payload: PayoutSchedulePayload):
             """
             SELECT PAYOUT_SCHEDULEID
             FROM GRATLYDB.PAYOUT_SCHEDULE
-            WHERE PAYOUT_SCHEDULEID = %s AND USERID = %s
+            WHERE PAYOUT_SCHEDULEID = %s AND RESTAURANTID = %s
             """,
-            (schedule_id, payload.user_id),
+            (schedule_id, restaurant_id),
         )
         row = cursor.fetchone()
         if not row:
@@ -304,7 +314,7 @@ def update_payout_schedule(schedule_id: int, payload: PayoutSchedulePayload):
                 PAYOUTTRIGGER_TIPS = %s,
                 PAYOUT_RULE_ID = %s,
                 PREPAYOUT_FLAG = %s
-            WHERE PAYOUT_SCHEDULEID = %s AND USERID = %s
+            WHERE PAYOUT_SCHEDULEID = %s AND RESTAURANTID = %s
             """,
             (
                 payload.name.strip(),
@@ -317,7 +327,7 @@ def update_payout_schedule(schedule_id: int, payload: PayoutSchedulePayload):
                 payout_rule_id,
                 pre_payout_flag,
                 schedule_id,
-                payload.user_id,
+                restaurant_id,
             ),
         )
 
@@ -419,6 +429,9 @@ def update_payout_schedule(schedule_id: int, payload: PayoutSchedulePayload):
 
 @router.get("/payout-schedules/{schedule_id}", response_model=PayoutScheduleDetail)
 def get_payout_schedule(schedule_id: int, user_id: int):
+    restaurant_id = _fetch_restaurant_key(user_id)
+    if not restaurant_id:
+        raise HTTPException(status_code=404, detail="Restaurant not found for user")
     cursor = _get_cursor(dictionary=True)
     try:
         cursor.execute(
@@ -434,10 +447,10 @@ def get_payout_schedule(schedule_id: int, user_id: int):
                 PAYOUTTRIGGER_GRATUITY AS payouttrigger_gratuity,
                 PAYOUTTRIGGER_TIPS AS payouttrigger_tips
             FROM GRATLYDB.PAYOUT_SCHEDULE
-            WHERE PAYOUT_SCHEDULEID = %s AND USERID = %s
+            WHERE PAYOUT_SCHEDULEID = %s AND RESTAURANTID = %s
             LIMIT 1
             """,
-            (schedule_id, user_id),
+            (schedule_id, restaurant_id),
         )
         schedule = cursor.fetchone()
         if not schedule:
@@ -506,6 +519,9 @@ def get_payout_schedule(schedule_id: int, user_id: int):
 
 @router.delete("/payout-schedules/{schedule_id}")
 def delete_payout_schedule(schedule_id: int, user_id: int):
+    restaurant_id = _fetch_restaurant_key(user_id)
+    if not restaurant_id:
+        raise HTTPException(status_code=404, detail="Restaurant not found for user")
     cursor = _get_cursor(dictionary=False)
     conn = cursor.connection
     try:
@@ -513,9 +529,9 @@ def delete_payout_schedule(schedule_id: int, user_id: int):
             """
             SELECT PAYOUT_SCHEDULEID
             FROM GRATLYDB.PAYOUT_SCHEDULE
-            WHERE PAYOUT_SCHEDULEID = %s AND USERID = %s
+            WHERE PAYOUT_SCHEDULEID = %s AND RESTAURANTID = %s
             """,
-            (schedule_id, user_id),
+            (schedule_id, restaurant_id),
         )
         row = cursor.fetchone()
         if not row:

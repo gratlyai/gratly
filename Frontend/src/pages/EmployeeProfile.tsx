@@ -5,6 +5,7 @@ import { fetchEmployee, fetchStripeConnectedAccount } from "../api/employees";
 import { fetchUserPermissions, updateUserPermissions } from "../api/permissions";
 import {
   defaultEmployeePermissions,
+  getStoredPermissions,
   permissionConfig,
   type PermissionState,
 } from "../auth/permissions";
@@ -16,6 +17,27 @@ const formatValue = (value: string | null | undefined) => {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : "N/A";
 };
+const formatCapabilities = (capabilities?: Record<string, string> | null) => {
+  if (!capabilities) {
+    return "N/A";
+  }
+  const entries = Object.entries(capabilities)
+    .map(([key, value]) => `${key}: ${value}`)
+    .join(", ");
+  return entries.length > 0 ? entries : "N/A";
+};
+const formatCardDetails = (card?: StripeConnectedAccountSummary["card"] | null) => {
+  if (!card) {
+    return "N/A";
+  }
+  const brand = card.brand ?? "Card";
+  const last4 = card.last4 ? `**** ${card.last4}` : "****";
+  const expMonth = card.expMonth ? String(card.expMonth).padStart(2, "0") : "--";
+  const expYear = card.expYear ? String(card.expYear) : "--";
+  const funding = card.funding ? `, ${card.funding}` : "";
+  const country = card.country ? `, ${card.country}` : "";
+  return `${brand} ${last4} exp ${expMonth}/${expYear}${funding}${country}`;
+};
 
 export default function EmployeeProfile() {
   const { employeeGuid } = useParams();
@@ -25,6 +47,9 @@ export default function EmployeeProfile() {
   const [permissions, setPermissions] = useState<PermissionState>(defaultEmployeePermissions);
   const [isSavingPermissions, setIsSavingPermissions] = useState(false);
   const [stripeAccount, setStripeAccount] = useState<StripeConnectedAccountSummary | null>(null);
+  const [currentUserPermissions] = useState<PermissionState>(() =>
+    getStoredPermissions(localStorage.getItem("userId")),
+  );
 
   const storageKey = useMemo(() => {
     const userId = employee?.userId;
@@ -136,9 +161,14 @@ export default function EmployeeProfile() {
     if (!employee?.userId) {
       return;
     }
+    const actorUserId = Number(localStorage.getItem("userId"));
     setIsSavingPermissions(true);
     try {
-      const updated = await updateUserPermissions(employee.userId, nextPermissions);
+      const updated = await updateUserPermissions(
+        employee.userId,
+        nextPermissions,
+        Number.isFinite(actorUserId) ? actorUserId : undefined,
+      );
       setPermissions({ ...defaultEmployeePermissions, ...updated });
       localStorage.setItem(storageKey, JSON.stringify(updated));
     } catch (error) {
@@ -232,7 +262,11 @@ export default function EmployeeProfile() {
                     checked={permissions[permission.key]}
                     onChange={(event) => handlePermissionChange(permission.key, event.target.checked)}
                     className="h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-900"
-                    disabled={!employee?.userId || isSavingPermissions}
+                    disabled={
+                      !employee?.userId ||
+                      isSavingPermissions ||
+                      (permission.key === "adminAccess" && !currentUserPermissions.adminAccess)
+                    }
                   />
                 </label>
               ))}
@@ -263,6 +297,10 @@ export default function EmployeeProfile() {
             {stripeAccount?.accountId ? (
               <div className="rounded-lg bg-gray-50 px-4 py-3 text-xs text-gray-600">
                 <p className="break-all">Account ID: {stripeAccount.accountId}</p>
+                <p>Business type: {stripeAccount.businessType ?? "N/A"}</p>
+                <p>Default currency: {stripeAccount.defaultCurrency ?? "N/A"}</p>
+                <p>Capabilities: {formatCapabilities(stripeAccount.capabilities)}</p>
+                <p>Card: {formatCardDetails(stripeAccount.card)}</p>
               </div>
             ) : null}
           </div>

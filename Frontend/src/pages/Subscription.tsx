@@ -6,6 +6,8 @@ import {
   createRestaurantSetupIntent,
   fetchRestaurantPaymentMethod,
   saveRestaurantPaymentMethod,
+  type StripeBusinessProfile,
+  type StripeCardSummary,
 } from "../api/stripe";
 
 const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY ?? "");
@@ -19,7 +21,7 @@ function SetupIntentForm({
 }: {
   restaurantId: number;
   clientSecret: string;
-  onSaved: (paymentMethodId: string) => void;
+  onSaved: (paymentMethodId: string) => Promise<void>;
 }) {
   const stripe = useStripe();
   const elements = useElements();
@@ -57,7 +59,7 @@ function SetupIntentForm({
 
     try {
       await saveRestaurantPaymentMethod(restaurantId, paymentMethodId);
-      onSaved(paymentMethodId);
+      await onSaved(paymentMethodId);
       setStatus("success");
     } catch (saveError) {
       console.warn("Failed to save payment method:", saveError);
@@ -91,6 +93,10 @@ export default function Subscription() {
   const [paymentMethodId, setPaymentMethodId] = useState<string | null>(null);
   const [bankLast4, setBankLast4] = useState<string | null>(null);
   const [bankName, setBankName] = useState<string | null>(null);
+  const [cardSummary, setCardSummary] = useState<StripeCardSummary | null>(null);
+  const [businessProfile, setBusinessProfile] = useState<StripeBusinessProfile | null>(null);
+  const [capabilities, setCapabilities] = useState<Record<string, string> | null>(null);
+  const [defaultCurrency, setDefaultCurrency] = useState<string | null>(null);
 
   useEffect(() => {
     if (!Number.isFinite(restaurantId)) {
@@ -111,6 +117,10 @@ export default function Subscription() {
           setPaymentMethodId(existing.paymentMethodId ?? null);
           setBankLast4(existing.bankLast4 ?? null);
           setBankName(existing.bankName ?? null);
+          setCardSummary(existing.card ?? null);
+          setBusinessProfile(existing.businessProfile ?? null);
+          setCapabilities(existing.capabilities ?? null);
+          setDefaultCurrency(existing.defaultCurrency ?? null);
           setStatus("ready");
           return;
         }
@@ -142,9 +152,67 @@ export default function Subscription() {
     [clientSecret],
   );
 
-  const handleSaved = (pmId: string) => {
+  const handleSaved = async (pmId: string) => {
     setIsConfigured(true);
     setPaymentMethodId(pmId);
+    if (!Number.isFinite(restaurantId)) {
+      return;
+    }
+    try {
+      const refreshed = await fetchRestaurantPaymentMethod(restaurantId);
+      if (refreshed.configured) {
+        setBankLast4(refreshed.bankLast4 ?? null);
+        setBankName(refreshed.bankName ?? null);
+        setCardSummary(refreshed.card ?? null);
+        setBusinessProfile(refreshed.businessProfile ?? null);
+        setCapabilities(refreshed.capabilities ?? null);
+        setDefaultCurrency(refreshed.defaultCurrency ?? null);
+      }
+    } catch (error) {
+      console.warn("Failed to refresh Stripe payment method:", error);
+    }
+  };
+  const formatCardDetails = (card: StripeCardSummary | null) => {
+    if (!card) {
+      return "N/A";
+    }
+    const brand = card.brand ?? "Card";
+    const last4 = card.last4 ? `**** ${card.last4}` : "****";
+    const expMonth = card.expMonth ? String(card.expMonth).padStart(2, "0") : "--";
+    const expYear = card.expYear ? String(card.expYear) : "--";
+    const funding = card.funding ? `, ${card.funding}` : "";
+    const country = card.country ? `, ${card.country}` : "";
+    return `${brand} ${last4} exp ${expMonth}/${expYear}${funding}${country}`;
+  };
+  const formatBusinessProfile = (profile: StripeBusinessProfile | null) => {
+    if (!profile) {
+      return "N/A";
+    }
+    const parts = [profile.name, profile.email, profile.phone].filter(Boolean);
+    return parts.length > 0 ? parts.join(" | ") : "N/A";
+  };
+  const formatAddress = (address: Record<string, string | null> | null | undefined) => {
+    if (!address) {
+      return "N/A";
+    }
+    const parts = [
+      address.line1,
+      address.line2,
+      address.city,
+      address.state,
+      address.postal_code,
+      address.country,
+    ].filter(Boolean);
+    return parts.length > 0 ? parts.join(", ") : "N/A";
+  };
+  const formatCapabilities = (values: Record<string, string> | null) => {
+    if (!values) {
+      return "N/A";
+    }
+    const entries = Object.entries(values)
+      .map(([key, value]) => `${key}: ${value}`)
+      .join(", ");
+    return entries.length > 0 ? entries : "N/A";
   };
 
   return (
@@ -172,6 +240,21 @@ export default function Subscription() {
                 {bankName ?? "Bank"} {bankLast4 ? `•••• ${bankLast4}` : ""}
               </p>
             ) : null}
+            <p className="mt-1 text-xs text-gray-500">Card: {formatCardDetails(cardSummary)}</p>
+            <p className="mt-1 text-xs text-gray-500">
+              Business profile: {formatBusinessProfile(businessProfile)}
+            </p>
+            {businessProfile?.address ? (
+              <p className="mt-1 text-xs text-gray-500">
+                Business address: {formatAddress(businessProfile.address)}
+              </p>
+            ) : null}
+            <p className="mt-1 text-xs text-gray-500">
+              Capabilities: {formatCapabilities(capabilities)}
+            </p>
+            <p className="mt-1 text-xs text-gray-500">
+              Default currency: {defaultCurrency ?? "N/A"}
+            </p>
             {paymentMethodId ? (
               <p className="mt-1 break-all text-xs text-gray-500">{paymentMethodId}</p>
             ) : null}

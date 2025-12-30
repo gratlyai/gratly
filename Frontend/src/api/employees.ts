@@ -25,6 +25,10 @@ export type StripeConnectedAccount = {
   detailsSubmitted: boolean;
   disabledReason?: string | null;
   accountDeauthorized?: boolean;
+  businessType?: string | null;
+  capabilities?: Record<string, string> | null;
+  defaultCurrency?: string | null;
+  card?: StripeCardSummary | null;
 };
 
 export type StripeConnectedAccountSummary = {
@@ -34,6 +38,19 @@ export type StripeConnectedAccountSummary = {
   detailsSubmitted?: boolean;
   disabledReason?: string | null;
   accountDeauthorized?: boolean;
+  businessType?: string | null;
+  capabilities?: Record<string, string> | null;
+  defaultCurrency?: string | null;
+  card?: StripeCardSummary | null;
+};
+
+export type StripeCardSummary = {
+  brand?: string | null;
+  last4?: string | null;
+  expMonth?: number | null;
+  expYear?: number | null;
+  funding?: string | null;
+  country?: string | null;
 };
 
 export type StripeOnboardingLink = {

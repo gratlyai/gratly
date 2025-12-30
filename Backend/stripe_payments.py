@@ -248,6 +248,61 @@ def _extract_metadata_from_raw(raw_payload: Optional[object]) -> Tuple[Optional[
     return None, None
 
 
+def _build_card_summary(card: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(card, dict):
+        return None
+    return {
+        "brand": card.get("brand"),
+        "last4": card.get("last4"),
+        "expMonth": card.get("exp_month"),
+        "expYear": card.get("exp_year"),
+        "funding": card.get("funding"),
+        "country": card.get("country"),
+    }
+
+
+def _fetch_connected_account_card(
+    stripe_module: Any,
+    StripeError: Any,
+    account_id: str,
+) -> Optional[Dict[str, Any]]:
+    try:
+        cards = stripe_module.Account.list_external_accounts(
+            account_id,
+            object="card",
+            limit=1,
+        )
+    except StripeError:
+        logger.exception("Stripe external account lookup failed for %s", account_id)
+        return None
+    data = None
+    if isinstance(cards, dict):
+        data = cards.get("data")
+    if not data:
+        return None
+    return _build_card_summary(data[0])
+
+
+def _fetch_customer_profile(
+    stripe_module: Any,
+    StripeError: Any,
+    customer_id: str,
+) -> Optional[Dict[str, Any]]:
+    try:
+        customer = stripe_module.Customer.retrieve(customer_id)
+    except StripeError:
+        logger.exception("Stripe customer lookup failed for %s", customer_id)
+        return None
+    if not customer:
+        return None
+    return {
+        "name": customer.get("name"),
+        "email": customer.get("email"),
+        "phone": customer.get("phone"),
+        "address": customer.get("address"),
+    }
+
+
 def _fetch_restaurant_id_by_guid(restaurant_guid: str) -> Optional[int]:
     cursor = _get_cursor(dictionary=True)
     try:
@@ -1466,12 +1521,17 @@ def create_or_fetch_connected_account(employee_guid: str):
     try:
         if existing_account_id:
             account = stripe.Account.retrieve(existing_account_id)
+            card_summary = _fetch_connected_account_card(stripe, StripeError, existing_account_id)
             return {
                 "accountId": existing_account_id,
                 "created": False,
                 "chargesEnabled": bool(account.get("charges_enabled")),
                 "payoutsEnabled": bool(account.get("payouts_enabled")),
                 "detailsSubmitted": bool(account.get("details_submitted")),
+                "businessType": account.get("business_type"),
+                "capabilities": account.get("capabilities"),
+                "defaultCurrency": account.get("default_currency"),
+                "card": card_summary,
             }
 
         account = stripe.Account.create(
@@ -1483,12 +1543,17 @@ def create_or_fetch_connected_account(employee_guid: str):
             },
         )
         _store_connected_account_id(employee_guid, account["id"])
+        card_summary = _fetch_connected_account_card(stripe, StripeError, account["id"])
         return {
             "accountId": account["id"],
             "created": True,
             "chargesEnabled": bool(account.get("charges_enabled")),
             "payoutsEnabled": bool(account.get("payouts_enabled")),
             "detailsSubmitted": bool(account.get("details_submitted")),
+            "businessType": account.get("business_type"),
+            "capabilities": account.get("capabilities"),
+            "defaultCurrency": account.get("default_currency"),
+            "card": card_summary,
         }
     except StripeError as exc:
         logger.exception("Stripe connected account error for %s", employee_guid)
@@ -1520,6 +1585,29 @@ def get_connected_account(employee_guid: str):
         cursor.close()
     if not row or not row.get("account_id"):
         return {"accountId": None}
+    business_type = None
+    capabilities = None
+    default_currency = None
+    card_summary = None
+    stripe_secret_key = os.getenv("STRIPE_SECRET_KEY") or os.getenv("STRIPE_API_KEY")
+    if stripe_secret_key:
+        try:
+            stripe, StripeError = _get_stripe_module()
+            stripe.api_key = stripe_secret_key
+            account = stripe.Account.retrieve(row.get("account_id"))
+            if account:
+                business_type = account.get("business_type")
+                capabilities = account.get("capabilities")
+                default_currency = account.get("default_currency")
+            card_summary = _fetch_connected_account_card(
+                stripe,
+                StripeError,
+                row.get("account_id"),
+            )
+        except HTTPException:
+            pass
+        except Exception:
+            logger.exception("Stripe account lookup failed for %s", row.get("account_id"))
     return {
         "accountId": row.get("account_id"),
         "chargesEnabled": bool(row.get("charges_enabled")),
@@ -1527,6 +1615,10 @@ def get_connected_account(employee_guid: str):
         "detailsSubmitted": bool(row.get("details_submitted")),
         "disabledReason": row.get("disabled_reason"),
         "accountDeauthorized": bool(row.get("account_deauthorized")),
+        "businessType": business_type,
+        "capabilities": capabilities,
+        "defaultCurrency": default_currency,
+        "card": card_summary,
     }
 
 
@@ -1752,12 +1844,41 @@ def get_restaurant_payment_method(restaurant_id: int):
     settings = _fetch_restaurant_settings(restaurant_id)
     if not settings or not settings.get("us_bank_payment_method_id"):
         return {"configured": False}
+    card_summary = None
+    business_profile = None
+    capabilities = None
+    default_currency = None
+    stripe_secret_key = os.getenv("STRIPE_SECRET_KEY") or os.getenv("STRIPE_API_KEY")
+    if stripe_secret_key:
+        try:
+            stripe, StripeError = _get_stripe_module()
+            stripe.api_key = stripe_secret_key
+            payment_method = stripe.PaymentMethod.retrieve(
+                settings.get("us_bank_payment_method_id"),
+            )
+            if payment_method:
+                card_summary = _build_card_summary(payment_method.get("card"))
+            customer_id = settings.get("stripe_customer_id")
+            if customer_id:
+                business_profile = _fetch_customer_profile(
+                    stripe,
+                    StripeError,
+                    customer_id,
+                )
+        except HTTPException:
+            pass
+        except Exception:
+            logger.exception("Stripe restaurant details lookup failed for %s", restaurant_id)
     return {
         "configured": True,
         "customerId": settings.get("stripe_customer_id"),
         "paymentMethodId": settings.get("us_bank_payment_method_id"),
         "bankLast4": settings.get("bank_last4"),
         "bankName": settings.get("bank_name"),
+        "card": card_summary,
+        "businessProfile": business_profile,
+        "capabilities": capabilities,
+        "defaultCurrency": default_currency,
     }
 
 

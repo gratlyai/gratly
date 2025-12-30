@@ -13,10 +13,12 @@ if __package__:
         _fetch_restaurant_name,
         _fetch_restaurant_guid,
         _fetch_user_permission_flags,
+        _fetch_user_permission_names,
         _fetch_employee_guid_for_user,
         _serialize_permissions,
         _fetch_restaurant_id_for_email,
         _get_env_or_ini,
+        PERMISSION_LABELS,
     )
     from .payout_schedules import router as payout_schedules_router
     from .password_reset import router as password_reset_router
@@ -32,10 +34,12 @@ else:
         _fetch_restaurant_name,
         _fetch_restaurant_guid,
         _fetch_user_permission_flags,
+        _fetch_user_permission_names,
         _fetch_employee_guid_for_user,
         _serialize_permissions,
         _fetch_restaurant_id_for_email,
         _get_env_or_ini,
+        PERMISSION_LABELS,
     )
     from payout_schedules import router as payout_schedules_router
     from password_reset import router as password_reset_router
@@ -96,6 +100,7 @@ class UserPermissionsPayload(BaseModel):
     approvePayouts: bool
     manageTeam: bool
     adminAccess: bool
+    managerAccess: bool
     employeeOnly: bool
 
 class TeamInvitePayload(BaseModel):
@@ -528,22 +533,26 @@ def get_user_permissions(user_id: int):
     cursor = _get_cursor(dictionary=True)
     try:
         cursor.execute(
+            "SELECT 1 FROM GRATLYDB.USER_MASTER WHERE USERID = %s LIMIT 1",
+            (user_id,),
+        )
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="User permissions not found")
+        cursor.execute(
             """
             SELECT
-                ISADMIN AS isAdmin,
-                ISEMPLOYEE AS isEmployee,
-                ISCREATEPAYOUTSCHEDULE AS isCreatePayoutSchedule,
-                ISAPPROVEPAYOUT AS isApprovePayout,
-                ISMANAGEEMPLOYEES AS isManageEmployees
-            FROM GRATLYDB.USER_PERMISSIONS
-            WHERE USERID = %s
-            LIMIT 1
+                mp.PERMISSIONSNAME AS permission_name
+            FROM GRATLYDB.USER_PERMISSIONS up
+            JOIN GRATLYDB.MSTR_PERMISSIONS mp ON up.PERMISSIONSID = mp.PERMISSIONSID
+            WHERE up.USERID = %s
+              AND (mp.DELETED IS NULL OR mp.DELETED = 0)
             """,
             (user_id,),
         )
-        row = cursor.fetchone()
-        permissions = _serialize_permissions(row)
-        if not permissions:
+        rows = cursor.fetchall()
+        permission_names = [row["permission_name"] for row in rows if row.get("permission_name")]
+        permissions = _serialize_permissions(permission_names)
+        if permissions is None:
             raise HTTPException(status_code=404, detail="User permissions not found")
         return permissions
     except pymysql.MySQLError as err:
@@ -552,49 +561,83 @@ def get_user_permissions(user_id: int):
         cursor.close()
 
 @app.put("/user-permissions/{user_id}", response_model=UserPermissionsPayload)
-def update_user_permissions(user_id: int, payload: UserPermissionsPayload):
+def update_user_permissions(user_id: int, payload: UserPermissionsPayload, actor_user_id: Optional[int] = None):
     cursor = _get_cursor(dictionary=True)
     try:
+        if actor_user_id is None:
+            raise HTTPException(status_code=400, detail="Missing actor_user_id")
+        actor_permission_names = _fetch_user_permission_names(actor_user_id)
+        actor_permissions = _serialize_permissions(actor_permission_names) or {}
+        target_permission_names = _fetch_user_permission_names(user_id)
+        target_permissions = _serialize_permissions(target_permission_names) or {}
+        if not actor_permissions.get("adminAccess") and payload.adminAccess != target_permissions.get("adminAccess"):
+            raise HTTPException(status_code=403, detail="Only admins can change admin access")
         cursor.execute(
-            """
-            UPDATE GRATLYDB.USER_PERMISSIONS
-            SET
-                ISADMIN = %s,
-                ISEMPLOYEE = %s,
-                ISCREATEPAYOUTSCHEDULE = %s,
-                ISAPPROVEPAYOUT = %s,
-                ISMANAGEEMPLOYEES = %s,
-                MODIFIEDDATE = CURRENT_TIMESTAMP
-            WHERE USERID = %s
-            """,
-            (
-                payload.adminAccess,
-                payload.employeeOnly,
-                payload.createPayoutSchedules,
-                payload.approvePayouts,
-                payload.manageTeam,
-                user_id,
-            ),
+            "SELECT 1 FROM GRATLYDB.USER_MASTER WHERE USERID = %s LIMIT 1",
+            (user_id,),
         )
-        if cursor.rowcount == 0:
+        if not cursor.fetchone():
             raise HTTPException(status_code=404, detail="User permissions not found")
+
+        permission_names = []
+        if payload.createPayoutSchedules:
+            permission_names.append(PERMISSION_LABELS["createPayoutSchedules"])
+        if payload.approvePayouts:
+            permission_names.append(PERMISSION_LABELS["approvePayouts"])
+        if payload.manageTeam:
+            permission_names.append(PERMISSION_LABELS["manageTeam"])
+        if payload.adminAccess:
+            permission_names.append(PERMISSION_LABELS["adminAccess"])
+        if payload.managerAccess:
+            permission_names.append(PERMISSION_LABELS["managerAccess"])
+        if payload.employeeOnly:
+            permission_names.append(PERMISSION_LABELS["employeeOnly"])
+
+        cursor.execute(
+            "DELETE FROM GRATLYDB.USER_PERMISSIONS WHERE USERID = %s",
+            (user_id,),
+        )
+
+        if permission_names:
+            placeholders = ", ".join(["%s"] * len(permission_names))
+            cursor.execute(
+                f"""
+                SELECT
+                    PERMISSIONSID AS permission_id,
+                    PERMISSIONSNAME AS permission_name
+                FROM GRATLYDB.MSTR_PERMISSIONS
+                WHERE PERMISSIONSNAME IN ({placeholders})
+                  AND (DELETED IS NULL OR DELETED = 0)
+                """,
+                tuple(permission_names),
+            )
+            rows = cursor.fetchall()
+            permission_ids = [
+                row["permission_id"] for row in rows if row.get("permission_id") is not None
+            ]
+            if permission_ids:
+                cursor.executemany(
+                    """
+                    INSERT INTO GRATLYDB.USER_PERMISSIONS (USERID, PERMISSIONSID)
+                    VALUES (%s, %s)
+                    """,
+                    [(user_id, permission_id) for permission_id in permission_ids],
+                )
+
         cursor.execute(
             """
-            SELECT
-                ISADMIN AS isAdmin,
-                ISEMPLOYEE AS isEmployee,
-                ISCREATEPAYOUTSCHEDULE AS isCreatePayoutSchedule,
-                ISAPPROVEPAYOUT AS isApprovePayout,
-                ISMANAGEEMPLOYEES AS isManageEmployees
-            FROM GRATLYDB.USER_PERMISSIONS
-            WHERE USERID = %s
-            LIMIT 1
+            SELECT mp.PERMISSIONSNAME AS permission_name
+            FROM GRATLYDB.USER_PERMISSIONS up
+            JOIN GRATLYDB.MSTR_PERMISSIONS mp ON up.PERMISSIONSID = mp.PERMISSIONSID
+            WHERE up.USERID = %s
+              AND (mp.DELETED IS NULL OR mp.DELETED = 0)
             """,
             (user_id,),
         )
-        row = cursor.fetchone()
-        permissions = _serialize_permissions(row)
-        if not permissions:
+        rows = cursor.fetchall()
+        permission_names = [row["permission_name"] for row in rows if row.get("permission_name")]
+        permissions = _serialize_permissions(permission_names)
+        if permissions is None:
             raise HTTPException(status_code=404, detail="User permissions not found")
         return permissions
     except pymysql.MySQLError as err:
@@ -655,18 +698,23 @@ def signup(data: dict):
 
     cursor.execute(
         """
-        INSERT INTO GRATLYDB.USER_PERMISSIONS (
-            USERID,
-            ISADMIN,
-            ISEMPLOYEE,
-            ISCREATEPAYOUTSCHEDULE,
-            ISAPPROVEPAYOUT,
-            ISMANAGEEMPLOYEES
-        )
-        VALUES (%s, %s, %s, %s, %s, %s)
+        SELECT PERMISSIONSID AS permission_id
+        FROM GRATLYDB.MSTR_PERMISSIONS
+        WHERE PERMISSIONSNAME = %s
+          AND (DELETED IS NULL OR DELETED = 0)
+        LIMIT 1
         """,
-        (user_id, False, True, False, False, False),
+        (PERMISSION_LABELS["employeeOnly"],),
     )
+    permission_row = cursor.fetchone()
+    if permission_row:
+        cursor.execute(
+            """
+            INSERT INTO GRATLYDB.USER_PERMISSIONS (USERID, PERMISSIONSID)
+            VALUES (%s, %s)
+            """,
+            (user_id, permission_row["permission_id"]),
+        )
 
     restaurant_id = _fetch_restaurant_id_for_email(email)
     if restaurant_id is not None:

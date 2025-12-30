@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from "react-router-dom";
 import gratlyLogo from './assets/gratlylogodash.png';
-import { getStoredPermissions, isOwner } from "./auth/permissions";
+import { fetchUserPermissions } from "./api/permissions";
+import { getStoredPermissions } from "./auth/permissions";
 
 
 const GratlyLogin: React.FC = () => {
@@ -86,6 +87,8 @@ const handleLogin = async () => {
       const fullName = `${data.first_name || ""} ${data.last_name || ""}`.trim();
       if (fullName) {
         localStorage.setItem("userName", fullName);
+      } else {
+        localStorage.removeItem("userName");
       }
       if (data.restaurant_key) {
         localStorage.setItem("restaurantKey", String(data.restaurant_key));
@@ -102,9 +105,22 @@ const handleLogin = async () => {
       }
 
       const employeeId = data.user_id ? String(data.user_id) : "";
-      const permissions = getStoredPermissions(employeeId, fullName);
-      const isAdminUser = permissions.adminAccess || isOwner(fullName);
-      if (data.restaurant_key && isAdminUser) {
+      let permissions = getStoredPermissions(employeeId);
+      if (data.user_id) {
+        try {
+          permissions = await fetchUserPermissions(data.user_id);
+          localStorage.setItem(`employeePermissions:${data.user_id}`, JSON.stringify(permissions));
+        } catch (error) {
+          console.warn("Failed to refresh permissions:", error);
+        }
+      }
+      const isBusinessUser =
+        permissions.adminAccess ||
+        permissions.managerAccess ||
+        permissions.createPayoutSchedules ||
+        permissions.approvePayouts ||
+        permissions.manageTeam;
+      if (data.restaurant_key && isBusinessUser) {
         navigate(`/business/${data.restaurant_key}/home`);
       } else if (employeeId) {
         navigate(`/employees/${employeeId}/home`);

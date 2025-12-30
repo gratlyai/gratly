@@ -3,6 +3,7 @@ export type PermissionKey =
   | "approvePayouts"
   | "manageTeam"
   | "adminAccess"
+  | "managerAccess"
   | "employeeOnly";
 
 export type PermissionState = Record<PermissionKey, boolean>;
@@ -12,39 +13,20 @@ export const permissionConfig: { key: PermissionKey; label: string }[] = [
   { key: "approvePayouts", label: "Approve Payouts" },
   { key: "manageTeam", label: "Manage Team" },
   { key: "adminAccess", label: "Admin Access" },
+  { key: "managerAccess", label: "Manager Access" },
   { key: "employeeOnly", label: "Employee Only" },
 ];
-
-export const OWNER_NAME = "abida shaik";
 
 export const defaultEmployeePermissions: PermissionState = {
   createPayoutSchedules: false,
   approvePayouts: false,
   manageTeam: false,
   adminAccess: false,
+  managerAccess: false,
   employeeOnly: true,
 };
 
-export const adminPermissions: PermissionState = {
-  createPayoutSchedules: true,
-  approvePayouts: true,
-  manageTeam: true,
-  adminAccess: true,
-  employeeOnly: true,
-};
-
-const normalizeName = (value: string) => value.trim().toLowerCase();
-
-export const isOwner = (userName?: string | null) =>
-  normalizeName(userName ?? "") === OWNER_NAME;
-
-export const getStoredPermissions = (
-  employeeId?: string | null,
-  userName?: string | null,
-): PermissionState => {
-  if (isOwner(userName)) {
-    return adminPermissions;
-  }
+export const getStoredPermissions = (employeeId?: string | null): PermissionState => {
   if (!employeeId) {
     return defaultEmployeePermissions;
   }
@@ -74,11 +56,12 @@ export const hasPermission = (
 };
 
 export const routePermissionMap: Record<string, PermissionKey | null> = {
-  home: "employeeOnly",
+  home: null,
   approvals: "approvePayouts",
   "shift-payout": "createPayoutSchedules",
   team: "manageTeam",
-  reports: "approvePayouts",
-  settings: "createPayoutSchedules",
+  reports: null,
+  settings: "adminAccess",
   profile: null,
+  subscription: "adminAccess",
 };

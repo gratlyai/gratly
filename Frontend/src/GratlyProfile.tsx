@@ -46,7 +46,7 @@ const GratlyProfilePage: React.FC = () => {
   const [editedProfile, setEditedProfile] = useState<UserProfile>(() => buildFallbackProfile());
   const [isLoadingProfile, setIsLoadingProfile] = useState<boolean>(true);
   const [permissions, setPermissions] = useState<PermissionState>(() =>
-    getStoredPermissions(localStorage.getItem("userId"), localStorage.getItem("userName")),
+    getStoredPermissions(localStorage.getItem("userId")),
   );
   const [showSavedToast, setShowSavedToast] = useState<boolean>(false);
   const [saveError, setSaveError] = useState<string>("");
@@ -62,6 +62,27 @@ const GratlyProfilePage: React.FC = () => {
       .map((value) => value[0]?.toUpperCase())
       .slice(0, 2)
       .join("") || "U";
+  const formatCapabilities = (capabilities?: Record<string, string> | null) => {
+    if (!capabilities) {
+      return "N/A";
+    }
+    const entries = Object.entries(capabilities)
+      .map(([key, value]) => `${key}: ${value}`)
+      .join(", ");
+    return entries.length > 0 ? entries : "N/A";
+  };
+  const formatCardDetails = (card?: StripeConnectedAccount["card"] | null) => {
+    if (!card) {
+      return "N/A";
+    }
+    const brand = card.brand ?? "Card";
+    const last4 = card.last4 ? `**** ${card.last4}` : "****";
+    const expMonth = card.expMonth ? String(card.expMonth).padStart(2, "0") : "--";
+    const expYear = card.expYear ? String(card.expYear) : "--";
+    const funding = card.funding ? `, ${card.funding}` : "";
+    const country = card.country ? `, ${card.country}` : "";
+    return `${brand} ${last4} exp ${expMonth}/${expYear}${funding}${country}`;
+  };
 
   useEffect(() => {
     const loadLogo = async (): Promise<void> => {
@@ -112,6 +133,10 @@ const GratlyProfilePage: React.FC = () => {
               detailsSubmitted: summary.detailsSubmitted ?? false,
               disabledReason: summary.disabledReason ?? null,
               accountDeauthorized: summary.accountDeauthorized ?? false,
+              businessType: summary.businessType ?? null,
+              capabilities: summary.capabilities ?? null,
+              defaultCurrency: summary.defaultCurrency ?? null,
+              card: summary.card ?? null,
             });
           })
           .catch(() => {
@@ -169,8 +194,7 @@ const GratlyProfilePage: React.FC = () => {
 
   useEffect(() => {
     const storedUserId = localStorage.getItem("userId");
-    const storedUserName = localStorage.getItem("userName");
-    setPermissions(getStoredPermissions(storedUserId, storedUserName));
+    setPermissions(getStoredPermissions(storedUserId));
   }, []);
 
   const handleEdit = () => {
@@ -489,6 +513,10 @@ const GratlyProfilePage: React.FC = () => {
                   <p>Charges enabled: {stripeAccount.chargesEnabled ? "Yes" : "No"}</p>
                   <p>Payouts enabled: {stripeAccount.payoutsEnabled ? "Yes" : "No"}</p>
                   <p>Details submitted: {stripeAccount.detailsSubmitted ? "Yes" : "No"}</p>
+                  <p>Business type: {stripeAccount.businessType ?? "N/A"}</p>
+                  <p>Default currency: {stripeAccount.defaultCurrency ?? "N/A"}</p>
+                  <p>Capabilities: {formatCapabilities(stripeAccount.capabilities)}</p>
+                  <p>Card: {formatCardDetails(stripeAccount.card)}</p>
                   {stripeAccount.accountDeauthorized ? (
                     <p>Account deauthorized: Yes</p>
                   ) : null}
