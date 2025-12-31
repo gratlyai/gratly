@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { api } from './api/client';
+import { fetchRecentSettlements } from './api/payments';
+import { fetchPendingPayouts, fetchWeeklyTipsGratuities } from './api/reports';
 
 interface WidgetData {
   netSales: number;
@@ -9,15 +11,14 @@ interface WidgetData {
   totalGratuity: number;
   gratuityChange: number;
   pendingPayouts: number;
-  payoutsChange: number;
   recentTransactions: Array<{
     id: string;
-    employee: string;
+    employeeName?: string | null;
     amount: number;
-    date: string;
-    status: string;
+    businessDate?: string | null;
+    createdAt?: string | null;
   }>;
-  revenueChart: Array<{ day: string; amount: number }>;
+  weeklyTipsGratuities: Array<{ day: string; date: string; tips: number; gratuity: number }>;
 }
 
 const IconNetSales = () => (
@@ -150,37 +151,8 @@ const IconInfo = ({ label }: { label: string }) => (
 
 const GratlyHomeDashboard: React.FC = () => {
   const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-  const revenueChartKey = 'weeklyRevenueChart';
-  const revenueChartDateKey = 'weeklyRevenueDate';
-  const revenueChartWeekKey = 'weeklyRevenueWeekKey';
   const storedUserName = localStorage.getItem('userName') || '';
   const firstName = storedUserName.trim().split(/\s+/)[0] || 'there';
-
-  const loadStoredRevenueChart = (): Array<{ day: string; amount: number }> => {
-    const stored = localStorage.getItem(revenueChartKey);
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored) as Array<{ day: string; amount: number }>;
-        if (Array.isArray(parsed) && parsed.length === 7) {
-          return dayLabels.map((day, index) => ({
-            day,
-            amount: Number(parsed[index]?.amount) || 0,
-          }));
-        }
-      } catch (error) {
-        console.warn('Failed to read stored weekly revenue chart:', error);
-      }
-    }
-    return dayLabels.map((day) => ({ day, amount: 0 }));
-  };
-
-  const getDayIndex = (date: Date): number => (date.getDay() + 6) % 7;
-  const getWeekKey = (date: Date): string => {
-    const start = new Date(date);
-    const dayIndex = getDayIndex(start);
-    start.setDate(start.getDate() - dayIndex);
-    return start.toISOString().slice(0, 10);
-  };
 
   const [widgetData, setWidgetData] = useState<WidgetData>({
     netSales: 0,
@@ -189,16 +161,14 @@ const GratlyHomeDashboard: React.FC = () => {
     tipsChange: 0,
     totalGratuity: 0,
     gratuityChange: 0,
-    pendingPayouts: 8450.25,
-    payoutsChange: -3.1,
-    recentTransactions: [
-      { id: '1', employee: 'John Smith', amount: 245.50, date: '2024-12-20', status: 'completed' },
-      { id: '2', employee: 'Sarah Johnson', amount: 198.75, date: '2024-12-20', status: 'completed' },
-      { id: '3', employee: 'Mike Davis', amount: 312.00, date: '2024-12-19', status: 'pending' },
-      { id: '4', employee: 'Emily Wilson', amount: 175.25, date: '2024-12-19', status: 'completed' },
-      { id: '5', employee: 'David Brown', amount: 289.50, date: '2024-12-18', status: 'completed' },
-    ],
-    revenueChart: loadStoredRevenueChart(),
+    pendingPayouts: 0,
+    recentTransactions: [],
+    weeklyTipsGratuities: dayLabels.map((day, index) => ({
+      day,
+      date: `day-${index}`,
+      tips: 0,
+      gratuity: 0,
+    })),
   });
 
   useEffect(() => {
@@ -238,62 +208,129 @@ const GratlyHomeDashboard: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (!Number.isFinite(widgetData.netSales) || widgetData.netSales <= 0) {
+    const storedUserId = localStorage.getItem('userId');
+    if (!storedUserId) {
       return;
     }
-
-    const today = new Date();
-    const todayKey = today.toISOString().slice(0, 10);
-    const lastUpdateKey = localStorage.getItem(revenueChartDateKey);
-    const currentWeekKey = getWeekKey(today);
-    const storedWeekKey = localStorage.getItem(revenueChartWeekKey);
-
-    const yesterday = new Date(today);
-    yesterday.setDate(today.getDate() - 1);
-    const yesterdayIndex = getDayIndex(yesterday);
-    const todayIndex = getDayIndex(today);
-
-    let nextChart = widgetData.revenueChart;
-    if (!Array.isArray(nextChart) || nextChart.length !== 7) {
-      nextChart = dayLabels.map((day) => ({ day, amount: 0 }));
+    const userId = Number(storedUserId);
+    if (!Number.isFinite(userId)) {
+      return;
     }
-
-    if (todayIndex === 0 || storedWeekKey !== currentWeekKey) {
-      nextChart = dayLabels.map((day) => ({ day, amount: 0 }));
-    } else {
-      nextChart = nextChart.map((item, index) => ({
-        day: dayLabels[index],
-        amount: Number(item.amount) || 0,
+    fetchPendingPayouts(userId).then((data) => {
+      setWidgetData((prev) => ({
+        ...prev,
+        pendingPayouts: Number(data.pendingPayouts) || 0,
       }));
-    }
+    });
+  }, []);
 
-    if (
-      lastUpdateKey === todayKey &&
-      Number(nextChart[yesterdayIndex]?.amount || 0) === widgetData.netSales
-    ) {
+  useEffect(() => {
+    const storedUserId = localStorage.getItem('userId');
+    if (!storedUserId) {
+      setWidgetData((prev) => ({
+        ...prev,
+        recentTransactions: [],
+      }));
       return;
     }
+    const userId = Number(storedUserId);
+    if (!Number.isFinite(userId)) {
+      return;
+    }
+    fetchRecentSettlements(userId)
+      .then((data) => {
+        const settlements = (data.settlements || []).map((item, index) => ({
+          id: item.settlementId
+            ? `${item.settlementId}-${item.employeeGuid ?? index}`
+            : `settlement-${index}`,
+          employeeName: item.employeeName ?? null,
+          amount: Number(item.amount) || 0,
+          businessDate: item.businessDate ?? null,
+          createdAt: item.createdAt ?? null,
+        }));
+        setWidgetData((prev) => ({
+          ...prev,
+          recentTransactions: settlements,
+        }));
+      })
+      .catch((error) => {
+        console.warn('Failed to load recent settlements:', error);
+      });
+  }, []);
 
-    nextChart[yesterdayIndex] = {
-      day: dayLabels[yesterdayIndex],
-      amount: widgetData.netSales,
-    };
-
-    setWidgetData((prev) => ({
-      ...prev,
-      revenueChart: nextChart,
-    }));
-
-    localStorage.setItem(revenueChartKey, JSON.stringify(nextChart));
-    localStorage.setItem(revenueChartDateKey, todayKey);
-    localStorage.setItem(revenueChartWeekKey, currentWeekKey);
-  }, [widgetData.netSales]);
+  useEffect(() => {
+    const storedUserId = localStorage.getItem('userId');
+    if (!storedUserId) {
+      return;
+    }
+    const userId = Number(storedUserId);
+    if (!Number.isFinite(userId)) {
+      return;
+    }
+    fetchWeeklyTipsGratuities(userId)
+      .then((data) => {
+        if (!Array.isArray(data.days) || data.days.length === 0) {
+          return;
+        }
+        const formatted = data.days.map((entry) => {
+          const dateValue = parseDateParts(entry.date);
+          const dayLabel =
+            !dateValue
+              ? dayLabels[0]
+              : dayLabels[(dateValue.getDay() + 6) % 7];
+          return {
+            day: dayLabel,
+            date: entry.date,
+            tips: Number(entry.tips) || 0,
+            gratuity: Number(entry.gratuity) || 0,
+          };
+        });
+        setWidgetData((prev) => ({
+          ...prev,
+          weeklyTipsGratuities: formatted,
+        }));
+      })
+      .catch((error) => {
+        console.warn('Failed to load weekly tips/gratuities:', error);
+      });
+  }, []);
 
   const formatCurrency = (amount: number): string => {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',
     }).format(amount);
+  };
+
+  const formatSettlementDate = (value: string | null | undefined): string => {
+    if (!value) {
+      return 'Unknown date';
+    }
+    const isoDate = value.split('T')[0]?.split(' ')[0] || value;
+    return isoDate;
+  };
+
+  const parseDateParts = (value: string): Date | null => {
+    const isoDate = value.split('T')[0]?.split(' ')[0] || value;
+    const parts = isoDate.split('-');
+    if (parts.length === 3) {
+      const year = Number(parts[0]);
+      const month = Number(parts[1]);
+      const day = Number(parts[2]);
+      if (Number.isFinite(year) && Number.isFinite(month) && Number.isFinite(day)) {
+        return new Date(year, month - 1, day);
+      }
+    }
+    const fallback = new Date(isoDate);
+    return Number.isNaN(fallback.getTime()) ? null : fallback;
+  };
+
+  const formatShortDate = (value: string): string => {
+    const parsed = parseDateParts(value);
+    if (!parsed) {
+      return value.split('T')[0]?.split(' ')[0] || value;
+    }
+    return new Intl.DateTimeFormat('en-US', { month: '2-digit', day: '2-digit' }).format(parsed);
   };
 
   const getChangeColor = (change: number): string => {
@@ -304,8 +341,24 @@ const GratlyHomeDashboard: React.FC = () => {
     return change >= 0 ? '↑' : '↓';
   };
 
-  const maxRevenue = Math.max(...widgetData.revenueChart.map(d => d.amount), 0);
-  const revenueMax = maxRevenue > 0 ? Math.ceil(maxRevenue / 1000) * 1000 : 1000;
+  const maxRevenue = Math.max(
+    ...widgetData.weeklyTipsGratuities.map((d) => d.tips + d.gratuity),
+    0,
+  );
+  const getNiceStep = (value: number): number => {
+    if (value <= 10) return 2;
+    if (value <= 50) return 5;
+    if (value <= 100) return 10;
+    if (value <= 250) return 25;
+    if (value <= 500) return 50;
+    if (value <= 1000) return 100;
+    if (value <= 2500) return 250;
+    if (value <= 5000) return 500;
+    if (value <= 10000) return 1000;
+    return 5000;
+  };
+  const step = getNiceStep(maxRevenue || 10);
+  const revenueMax = maxRevenue > 0 ? Math.ceil(maxRevenue / step) * step : step * 5;
   const revenueMin = 0;
   const revenueRange = revenueMax - revenueMin;
   const yAxisTicks = Array.from({ length: 6 }, (_, index) =>
@@ -404,30 +457,38 @@ const GratlyHomeDashboard: React.FC = () => {
             <div className="mb-2">
               <p className="text-3xl font-bold text-gray-900">{formatCurrency(widgetData.pendingPayouts)}</p>
             </div>
-            <div className={`flex items-center text-sm ${getChangeColor(widgetData.payoutsChange)}`}>
-              <span className="font-semibold">{getChangeIcon(widgetData.payoutsChange)} {Math.abs(widgetData.payoutsChange)}%</span>
-              <span className="ml-2 text-gray-500">vs last month</span>
-            </div>
           </div>
         </div>
 
         {/* Bottom Row - 2 Larger Widgets */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Widget 5: Revenue Chart */}
+          {/* Widget 5: Weekly Tips & Gratuities */}
           <div className="bg-white rounded-xl shadow-md p-6 border border-gray-200 flex flex-col">
             <div className="flex items-center justify-between mb-6">
               <div>
-                <h3 className="text-lg font-bold text-gray-900">Weekly Revenue</h3>
+                <h3 className="text-lg font-bold text-gray-900">Weekly Tips &amp; Gratuities</h3>
                 <p className="text-sm text-gray-600">Last 7 days performance</p>
               </div>
-              <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
-                <IconRevenue />
+              <div className="flex flex-col items-end gap-3">
+                <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
+                  <IconRevenue />
+                </div>
+                <div className="flex items-center gap-4 text-xs font-medium text-gray-600">
+                  <span className="flex items-center gap-2">
+                    <span className="h-2.5 w-2.5 rounded-full bg-[#cab99a]" />
+                    Tips
+                  </span>
+                  <span className="flex items-center gap-2">
+                    <span className="h-2.5 w-2.5 rounded-full bg-[#e6d7b8]" />
+                    Gratuity
+                  </span>
+                </div>
               </div>
             </div>
             
             {/* Simple Bar Chart */}
             <div className="mt-2 flex-1 flex flex-col">
-              <div className="relative flex-1">
+              <div className="relative h-64">
                 {yAxisTicks.map((value) => {
                   const top = revenueRange === 0 ? 100 : 100 - (value / revenueRange) * 100;
                   return (
@@ -444,27 +505,42 @@ const GratlyHomeDashboard: React.FC = () => {
                   );
                 })}
                 <div className="absolute left-12 right-0 bottom-0 top-0 flex items-end justify-between gap-2 px-1 pb-1">
-                  {widgetData.revenueChart.map((item) => {
+                  {widgetData.weeklyTipsGratuities.map((item) => {
+                    const total = item.tips + item.gratuity;
                     const normalized = Math.max(
                       0,
-                      Math.min(1, revenueRange === 0 ? 0 : (item.amount - revenueMin) / revenueRange)
+                      Math.min(1, revenueRange === 0 ? 0 : (total - revenueMin) / revenueRange),
                     );
+                    const tipsHeight = total > 0 ? Math.round((item.tips / total) * 100) : 0;
+                    const gratuityHeight = 100 - tipsHeight;
                     return (
-                      <div key={item.day} className="flex-1 flex items-end">
+                      <div key={item.date} className="flex-1 flex items-end h-full">
                         <div
-                          className="w-full bg-gradient-to-t from-indigo-600 to-indigo-400 rounded-t-lg hover:from-indigo-700 hover:to-indigo-500 transition-all cursor-pointer"
+                          className="w-3/4 mx-auto rounded-t-lg overflow-hidden transition-all cursor-pointer"
                           style={{ height: `${normalized * 100}%` }}
-                          title={`${item.day}: ${formatCurrency(item.amount)}`}
-                        />
+                          title={`${item.day}: ${formatCurrency(total)}`}
+                        >
+                          <div
+                            className="w-full bg-[#cab99a]"
+                            style={{ height: `${tipsHeight}%` }}
+                            title={`Tips: ${formatCurrency(item.tips)}`}
+                          />
+                          <div
+                            className="w-full bg-[#e6d7b8]"
+                            style={{ height: `${gratuityHeight}%` }}
+                            title={`Gratuity: ${formatCurrency(item.gratuity)}`}
+                          />
+                        </div>
                       </div>
                     );
                   })}
                 </div>
               </div>
               <div className="ml-12 mt-2 flex justify-between gap-2 text-xs text-gray-600 font-medium">
-                {widgetData.revenueChart.map((item) => (
-                  <span key={item.day} className="flex-1 text-center">
-                    {item.day}
+                {widgetData.weeklyTipsGratuities.map((item) => (
+                  <span key={item.date} className="flex-1 text-center">
+                    <span className="block">{formatShortDate(item.date)}</span>
+                    <span className="block text-[10px] text-gray-400">{item.day}</span>
                   </span>
                 ))}
               </div>
@@ -476,7 +552,7 @@ const GratlyHomeDashboard: React.FC = () => {
             <div className="flex items-center justify-between mb-6">
               <div>
                 <h3 className="text-lg font-bold text-gray-900">Recent Transactions</h3>
-                <p className="text-sm text-gray-600">Latest tip distributions</p>
+                <p className="text-sm text-gray-600">Latest payout settlements</p>
               </div>
               <div className="w-10 h-10 bg-teal-100 rounded-lg flex items-center justify-center">
                 <IconTransactions />
@@ -484,34 +560,38 @@ const GratlyHomeDashboard: React.FC = () => {
             </div>
             
             <div className="space-y-3">
-              {widgetData.recentTransactions.map((transaction) => (
-                <div 
-                  key={transaction.id} 
-                  className="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 transition-colors border border-gray-100"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-gray-200 rounded-full flex items-center justify-center">
-                      <span className="text-sm font-bold text-gray-600">
-                        {transaction.employee.split(' ').map(n => n[0]).join('')}
-                      </span>
-                    </div>
-                    <div>
-                      <p className="font-medium text-gray-900">{transaction.employee}</p>
-                      <p className="text-xs text-gray-500">{transaction.date}</p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <p className="font-bold text-gray-900">{formatCurrency(transaction.amount)}</p>
-                    <span className={`text-xs px-2 py-1 rounded-full ${
-                      transaction.status === 'completed' 
-                        ? 'bg-green-100 text-green-800' 
-                        : 'bg-yellow-100 text-yellow-800'
-                    }`}>
-                      {transaction.status}
-                    </span>
-                  </div>
+              {widgetData.recentTransactions.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-gray-200 p-4 text-sm text-gray-500">
+                  No recent settlements yet.
                 </div>
-              ))}
+              ) : (
+                widgetData.recentTransactions.map((transaction) => {
+                  const dateLabel = formatSettlementDate(
+                    transaction.businessDate || transaction.createdAt,
+                  );
+                  return (
+                    <div
+                      key={transaction.id}
+                      className="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 transition-colors border border-gray-100"
+                    >
+                      <div>
+                        <p className="font-medium text-gray-900">{dateLabel}</p>
+                        {transaction.employeeName ? (
+                          <p className="text-xs text-gray-500">{transaction.employeeName}</p>
+                        ) : null}
+                      </div>
+                      <div className="text-right">
+                        <p className="font-bold text-gray-900">
+                          {formatCurrency(transaction.amount)}
+                        </p>
+                        <span className="text-xs px-2 py-1 rounded-full bg-green-100 text-green-800">
+                          completed
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
         </div>

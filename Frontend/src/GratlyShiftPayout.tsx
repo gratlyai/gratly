@@ -1148,13 +1148,25 @@ const GratlyFormsSystem: React.FC = () => {
                     {isPayoutDropdownOpen ? (
                       <div className="absolute z-10 mt-2 w-full max-h-60 overflow-auto border border-gray-200 rounded-lg bg-white shadow-lg">
                         <div className="px-3 py-2 border-b border-gray-200">
-                          <input
-                            type="text"
-                            value={payoutContributorSearch}
-                            onChange={(e) => setPayoutContributorSearch(e.target.value)}
-                            placeholder="Search contributors"
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-gray-900 outline-none"
-                          />
+                          <div className="relative">
+                            <input
+                              type="text"
+                              value={payoutContributorSearch}
+                              onChange={(e) => setPayoutContributorSearch(e.target.value)}
+                              placeholder="Search contributors"
+                              className="w-full px-3 py-2 pr-9 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-gray-900 outline-none"
+                            />
+                            {payoutContributorSearch ? (
+                              <button
+                                type="button"
+                                onClick={() => setPayoutContributorSearch('')}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                                aria-label="Clear contributor search"
+                              >
+                                ×
+                              </button>
+                            ) : null}
+                          </div>
                         </div>
                         {jobTitles.length === 0 ? (
                           <div className="px-4 py-3 text-sm text-gray-500">No job titles available</div>
@@ -1238,13 +1250,25 @@ const GratlyFormsSystem: React.FC = () => {
                     {isReceiverDropdownOpen ? (
                       <div className="absolute z-10 mt-2 w-full max-h-60 overflow-auto border border-gray-200 rounded-lg bg-white shadow-lg">
                         <div className="px-3 py-2 border-b border-gray-200">
-                          <input
-                            type="text"
-                            value={payoutReceiverSearch}
-                            onChange={(e) => setPayoutReceiverSearch(e.target.value)}
-                            placeholder="Search receivers"
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-gray-900 outline-none"
-                          />
+                          <div className="relative">
+                            <input
+                              type="text"
+                              value={payoutReceiverSearch}
+                              onChange={(e) => setPayoutReceiverSearch(e.target.value)}
+                              placeholder="Search receivers"
+                              className="w-full px-3 py-2 pr-9 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-gray-900 outline-none"
+                            />
+                            {payoutReceiverSearch ? (
+                              <button
+                                type="button"
+                                onClick={() => setPayoutReceiverSearch('')}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                                aria-label="Clear receiver search"
+                              >
+                                ×
+                              </button>
+                            ) : null}
+                          </div>
                         </div>
                         {jobTitles.length === 0 ? (
                           <div className="px-4 py-3 text-sm text-gray-500">No job titles available</div>

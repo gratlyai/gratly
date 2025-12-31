@@ -773,6 +773,30 @@ def approve_payout_schedule(payload: ApprovalFinalizePayload):
         )
         cursor.execute(
             """
+            SELECT COALESCE(SUM(PREPAYOUT_VALUE), 0) AS total_prepayout
+            FROM GRATLYDB.PREPAYOUT
+            WHERE PAYOUT_SCHEDULEID = %s
+            """,
+            (payload.payoutScheduleId,),
+        )
+        prepayout_row = cursor.fetchone()
+        total_prepayout = float(prepayout_row["total_prepayout"] or 0)
+
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS payout_user_count
+            FROM GRATLYDB.PAYOUT_APPROVAL_ITEMS
+            WHERE PAYOUT_APPROVALID = %s
+              AND NET_PAYOUT > 0
+            """,
+            (row["approval_id"],),
+        )
+        count_row = cursor.fetchone()
+        payout_user_count = int(count_row["payout_user_count"] or 0)
+        prepayout_per_user = round(total_prepayout / payout_user_count, 2) if payout_user_count > 0 else 0
+
+        cursor.execute(
+            """
             INSERT INTO GRATLYDB.PAYOUT_FINAL (
                 PAYOUT_APPROVALID,
                 RESTAURANTID,
@@ -793,6 +817,7 @@ def approve_payout_schedule(payload: ApprovalFinalizePayload):
                 PAYOUT_TIPS,
                 PAYOUT_GRATUITY,
                 NET_PAYOUT,
+                PREPAYOUT_DEDUCTION,
                 APPROVED_USERID
             )
             SELECT
@@ -814,12 +839,26 @@ def approve_payout_schedule(payload: ApprovalFinalizePayload):
                 OVERALL_GRATUITY,
                 PAYOUT_TIPS,
                 PAYOUT_GRATUITY,
-                NET_PAYOUT,
+                CASE
+                    WHEN %s > 0 AND NET_PAYOUT > 0 THEN ROUND(GREATEST(0, NET_PAYOUT - %s), 2)
+                    ELSE NET_PAYOUT
+                END AS NET_PAYOUT,
+                CASE
+                    WHEN %s > 0 AND NET_PAYOUT > 0 THEN %s
+                    ELSE 0
+                END AS PREPAYOUT_DEDUCTION,
                 %s
             FROM GRATLYDB.PAYOUT_APPROVAL_ITEMS
             WHERE PAYOUT_APPROVALID = %s
             """,
-            (payload.userId, row["approval_id"]),
+            (
+                prepayout_per_user,
+                prepayout_per_user,
+                prepayout_per_user,
+                prepayout_per_user,
+                payload.userId,
+                row["approval_id"],
+            ),
         )
         conn.commit()
         debit_result = None

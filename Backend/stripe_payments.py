@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Any, Dict, Optional, Tuple, List
 from decimal import Decimal, ROUND_HALF_UP
+import pymysql
 import hashlib
 import hmac
 import json
@@ -12,9 +13,23 @@ import importlib
 from dotenv import load_dotenv
 
 try:
-    from Backend.db import _get_cursor
+    from Backend.db import (
+        _get_cursor,
+        _fetch_employee_guid_for_user,
+        _fetch_restaurant_key,
+        _fetch_restaurant_guid,
+        _fetch_user_permission_names,
+        _serialize_permissions,
+    )
 except ImportError:
-    from db import _get_cursor
+    from db import (
+        _get_cursor,
+        _fetch_employee_guid_for_user,
+        _fetch_restaurant_key,
+        _fetch_restaurant_guid,
+        _fetch_user_permission_names,
+        _serialize_permissions,
+    )
 
 router = APIRouter()
 
@@ -67,6 +82,19 @@ class StripeBulkRefreshPayload(BaseModel):
 
 class StripeRestaurantGuidBackfillPayload(BaseModel):
     limit: int = 500
+
+
+class RecentSettlementRow(BaseModel):
+    settlementId: str
+    employeeGuid: Optional[str] = None
+    employeeName: Optional[str] = None
+    amount: float
+    businessDate: Optional[str] = None
+    createdAt: Optional[str] = None
+
+
+class RecentSettlementsResponse(BaseModel):
+    settlements: List[RecentSettlementRow]
 
 
 def _require_admin_token(request: Request) -> None:
@@ -1501,6 +1529,85 @@ def _assert_employee_exists(employee_guid: str) -> None:
         )
         if not cursor.fetchone():
             raise HTTPException(status_code=404, detail="Employee not found")
+    finally:
+        cursor.close()
+
+
+@router.get("/recent-settlements", response_model=RecentSettlementsResponse)
+def get_recent_settlements(user_id: int, limit: int = 5):
+    permission_names = _fetch_user_permission_names(user_id)
+    permissions = _serialize_permissions(permission_names)
+    if permissions is None:
+        raise HTTPException(status_code=404, detail="User permissions not found")
+    restaurant_id = _fetch_restaurant_key(user_id)
+    if not restaurant_id:
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+
+    is_admin_view = bool(permissions.get("adminAccess") or permissions.get("managerAccess"))
+    employee_guid = None
+    if not is_admin_view:
+        employee_guid = _fetch_employee_guid_for_user(user_id)
+        if not employee_guid:
+            return {"settlements": []}
+
+    safe_limit = max(1, min(int(limit), 50))
+
+    cursor = _get_cursor(dictionary=True)
+    try:
+        query = """
+            SELECT
+                st.SETTLEMENT_ID AS settlement_id,
+                st.EMPLOYEEGUID AS employee_guid,
+                CONCAT_WS(' ', se.EMPLOYEEFNAME, se.EMPLOYEELNAME) AS employee_name,
+                st.AMOUNT_CENTS AS amount_cents,
+                st.CREATED_AT AS created_at,
+                pf.business_date AS business_date
+            FROM GRATLYDB.STRIPE_SETTLEMENT_TRANSFERS st
+            LEFT JOIN GRATLYDB.SRC_EMPLOYEES se
+                ON se.EMPLOYEEGUID = st.EMPLOYEEGUID
+            LEFT JOIN GRATLYDB.SRC_ONBOARDING so
+                ON so.RESTAURANTGUID = COALESCE(st.RESTAURANTGUID, se.RESTAURANTGUID)
+            LEFT JOIN (
+                SELECT
+                    PAYOUT_APPROVALID AS settlement_id,
+                    RESTAURANTID AS restaurant_id,
+                    MIN(BUSINESSDATE) AS business_date
+                FROM GRATLYDB.PAYOUT_FINAL
+                GROUP BY PAYOUT_APPROVALID, RESTAURANTID
+            ) pf
+                ON pf.settlement_id = st.SETTLEMENT_ID
+                AND pf.restaurant_id = so.RESTAURANTID
+            WHERE so.RESTAURANTID = %s
+        """
+        params: List[Any] = [restaurant_id]
+        if employee_guid:
+            query += " AND st.EMPLOYEEGUID = %s"
+            params.append(employee_guid)
+        query += " ORDER BY st.CREATED_AT DESC LIMIT %s"
+        params.append(safe_limit)
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        settlements = []
+        for row in rows:
+            employee_name = (row.get("employee_name") or "").strip() or None
+            amount_cents = int(row.get("amount_cents") or 0)
+            created_at = row.get("created_at")
+            created_at_value = (
+                created_at.isoformat() if hasattr(created_at, "isoformat") else created_at
+            )
+            settlements.append(
+                {
+                    "settlementId": str(row.get("settlement_id") or ""),
+                    "employeeGuid": row.get("employee_guid"),
+                    "employeeName": employee_name,
+                    "amount": round(amount_cents / 100, 2),
+                    "businessDate": row.get("business_date"),
+                    "createdAt": created_at_value,
+                }
+            )
+        return {"settlements": settlements}
+    except pymysql.MySQLError as err:
+        raise HTTPException(status_code=500, detail=f"Error fetching recent settlements: {err}")
     finally:
         cursor.close()
 

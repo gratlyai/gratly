@@ -3,6 +3,7 @@ import {
   approvePayoutSchedule,
   fetchApprovals,
   saveApprovalOverrides,
+  type ApprovalsResponse,
   type ApprovalScheduleWithContributors,
 } from "../api/approvals";
 import { fetchActiveEmployeesByJobTitle, type EmployeeWithJob } from "../api/employees";
@@ -34,6 +35,24 @@ const getDateKey = (value: string | null) => {
   }
   const key = value.replace(/\D/g, "");
   return key.length ? key : value;
+};
+
+const getBusinessDayLabel = (value: string | null) => {
+  if (!value) {
+    return "";
+  }
+  const digits = value.replace(/\D/g, "");
+  const formatDay = (date: Date) =>
+    Number.isNaN(date.getTime())
+      ? ""
+      : new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(date);
+  if (digits.length === 8) {
+    const year = Number(digits.slice(0, 4));
+    const month = Number(digits.slice(4, 6)) - 1;
+    const day = Number(digits.slice(6, 8));
+    return formatDay(new Date(year, month, day));
+  }
+  return formatDay(new Date(value));
 };
 
 const sortSchedulesByDate = (items: ApprovalScheduleWithContributors[]) =>
@@ -68,6 +87,34 @@ export default function Reconciliation() {
   const [customReceivers, setCustomReceivers] = useState<Record<string, CustomReceiverEntry[]>>({});
   const [customReceiverDropdowns, setCustomReceiverDropdowns] = useState<Record<string, boolean>>({});
 
+  const applyApprovals = (data: ApprovalsResponse) => {
+    const sortedSchedules = sortSchedulesByDate(data.schedules);
+    setSchedules(sortedSchedules);
+    setExpandedScheduleKeys(new Set());
+    setEditingScheduleKey(null);
+    setApprovedScheduleKeys(
+      new Set(
+        sortedSchedules
+          .filter((item) => item.isApproved)
+          .map((item) => `${item.payoutScheduleId}-${item.businessDate}`),
+      ),
+    );
+  };
+
+  const refreshApprovals = async (currentRestaurantId: number, showLoading = true) => {
+    if (showLoading) {
+      setIsLoading(true);
+    }
+    try {
+      const data = await fetchApprovals(currentRestaurantId);
+      applyApprovals(data);
+    } finally {
+      if (showLoading) {
+        setIsLoading(false);
+      }
+    }
+  };
+
   useEffect(() => {
     const storedRestaurantId = localStorage.getItem("restaurantKey");
     if (storedRestaurantId) {
@@ -99,17 +146,7 @@ export default function Reconciliation() {
     fetchApprovals(restaurantId)
       .then((data) => {
         if (isMounted) {
-          const sortedSchedules = sortSchedulesByDate(data.schedules);
-          setSchedules(sortedSchedules);
-          setExpandedScheduleKeys(new Set());
-          setEditingScheduleKey(null);
-          setApprovedScheduleKeys(
-            new Set(
-              sortedSchedules
-                .filter((item) => item.isApproved)
-                .map((item) => `${item.payoutScheduleId}-${item.businessDate}`),
-            ),
-          );
+          applyApprovals(data);
         }
       })
       .finally(() => {
@@ -500,14 +537,22 @@ export default function Reconciliation() {
                   }}
                 >
                   <div className="flex flex-wrap items-center gap-3">
-                    <h2 className="text-lg font-semibold text-gray-900">
-                      {schedule.name ?? "Payout Schedule"}
-                      {schedule.businessDate ? (
-                        <span className="ml-2 font-semibold text-gray-900">
-                          ({schedule.businessDate})
-                        </span>
-                      ) : null}
-                    </h2>
+                    <div>
+                      <h2 className="text-lg font-semibold text-gray-900">
+                        {schedule.name ?? "Payout Schedule"}
+                        {schedule.businessDate ? (
+                          <span className="ml-2 font-semibold text-gray-900">
+                            ({schedule.businessDate})
+                          </span>
+                        ) : null}
+                      </h2>
+                      {(() => {
+                        const dayLabel = getBusinessDayLabel(schedule.businessDate);
+                        return dayLabel ? (
+                          <p className="mt-1 text-sm text-gray-500">{dayLabel}</p>
+                        ) : null;
+                      })()}
+                    </div>
                   </div>
                   <div className="flex flex-wrap items-center justify-center gap-2 text-sm text-gray-600">
                     <span className="rounded-full border border-gray-200 bg-white px-3 py-1 text-black">
@@ -553,11 +598,28 @@ export default function Reconciliation() {
                               console.warn("Failed to debit restaurant for approved payout:", error);
                             }
                           }
-                          setApprovedScheduleKeys((current) => {
-                            const next = new Set(current);
-                            next.add(scheduleKey);
-                            return next;
-                          });
+                          if (approvalResponse?.success) {
+                            setSchedules((current) =>
+                              current.filter(
+                                (item) =>
+                                  `${item.payoutScheduleId}-${item.businessDate}` !== scheduleKey,
+                              ),
+                            );
+                            setExpandedScheduleKeys((current) => {
+                              const next = new Set(current);
+                              next.delete(scheduleKey);
+                              return next;
+                            });
+                            setEditingScheduleKey((current) =>
+                              current === scheduleKey ? null : current,
+                            );
+                            setApprovedScheduleKeys((current) => {
+                              const next = new Set(current);
+                              next.add(scheduleKey);
+                              return next;
+                            });
+                            await refreshApprovals(restaurantId, false);
+                          }
                         }}
                         className="rounded-lg bg-[#cab99a] px-5 py-2.5 text-base font-semibold text-black shadow-md transition hover:bg-[#bfa986] hover:shadow-lg"
                       >
