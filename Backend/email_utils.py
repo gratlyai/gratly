@@ -9,17 +9,27 @@ try:
 except ImportError:
     from db import _get_env_or_ini
 
-def send_sendgrid_email(to_email: str, subject: str, content: str, sender_name: Optional[str] = None):
+def send_sendgrid_email(
+    to_email: str,
+    subject: str,
+    content: str,
+    sender_name: Optional[str] = None,
+    html_content: Optional[str] = None,
+):
     api_key = _get_env_or_ini("SENDGRID_API_KEY")
     from_email = _get_env_or_ini("SENDGRID_FROM_EMAIL")
     if not api_key or not from_email:
         raise HTTPException(status_code=500, detail="SendGrid is not configured")
 
+    contents = [{"type": "text/plain", "value": content}]
+    if html_content:
+        contents.append({"type": "text/html", "value": html_content})
+
     payload = {
         "personalizations": [{"to": [{"email": to_email}]}],
         "from": {"email": from_email, "name": sender_name or "Gratly"},
         "subject": subject,
-        "content": [{"type": "text/plain", "value": content}],
+        "content": contents,
     }
     request = urllib.request.Request(
         "https://api.sendgrid.com/v3/mail/send",

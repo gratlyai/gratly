@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import gratlyLogo from './assets/gratlylogodash.png';
 
 
@@ -21,6 +21,7 @@ const GratlySignUp: React.FC = () => {
   });
   const [emailError, setEmailError] = useState<string>('');
   const [phoneError, setPhoneError] = useState<string>('');
+  const [inviteToken, setInviteToken] = useState<string>('');
 
   const validateEmail = (email: string): boolean => {
     const hasAt = email.includes('@');
@@ -143,21 +144,31 @@ const GratlySignUp: React.FC = () => {
     };
     loadLogo();
   }, []);
-const navigate = useNavigate();
+const navigate = useNavigate();  const location = useLocation();
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const token = params.get('token');
+    if (token) {
+      setInviteToken(token);
+    }
+  }, [location.search]);
 
 const handleSignUp = async () => {
   setIsLoading(true);
   try {
-    const res = await fetch("http://127.0.0.1:8000/signup", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    const payload = {
         firstName,
         lastName,
         email,
         phoneNumber,
         password,
-      }),
+        ...(inviteToken ? { inviteToken } : {}),
+      };
+      const res = await fetch("http://127.0.0.1:8000/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
     });
 
     let data;
