@@ -67,54 +67,10 @@ const GratlyFormsSystem: React.FC = () => {
   const [endDate, setEndDate] = useState<string>('');
   const [startTime, setStartTime] = useState<string>('');
   const [endTime, setEndTime] = useState<string>('');
-  const [orderCalculation, setOrderCalculation] = useState<'opened' | 'closed'>('opened');
-  const [tipPoolType, setTipPoolType] = useState<'individual' | 'group' | 'points'>('individual');
   const [fundsFrom, setFundsFrom] = useState<Fund[]>([
     { name: 'Gratuity', selected: true, percentage: 100 },
     { name: 'Tips', selected: true, percentage: 100 }
   ]);
-  const positionOptions = [
-    'Baker',
-    'Banquet Manager',
-    'Bar Back',
-    'Barista',
-    'Bartender',
-    'Beverage Manager',
-    'Broiler Cook/Fullservice',
-    'Broiler Cook/Quickservice',
-    'Bus person/Busser',
-    'Cashier',
-    'Catering Manager',
-    'Controller',
-    'Counter Server',
-    "Dining room manager/Maître D'hotel",
-    'Dishwasher',
-    'Executive Chef',
-    'Expediter',
-    'Food and Beverage Director',
-    'Fry/Sauté Cook',
-    'Garde Manger/Pantry Chef',
-    'General Manager Fullservice',
-    'General Manager Quickservice',
-    'Grill Cook',
-    'Host',
-    'Kitchen Manager',
-    'Line Cook',
-    'Manager',
-    'Pastry Chef',
-    'Public Relations/ Marketing Manager',
-    'Server',
-    'Service Manager',
-    'Shift Manager',
-    'Sommelier',
-    'Soup & Sauce Cook/Potager & Saucier',
-    'Sous Chef',
-    'Sushi Chef',
-    'To-Go Specialist',
-    'Wine steward',
-    'Chief Executive Officer',
-    'Chief Financial Officer'
-  ];
   const timeOptions = Array.from({ length: 96 }, (_, index) => {
     const hour = Math.floor(index / 4);
     const minute = (index % 4) * 15;
@@ -140,17 +96,6 @@ const GratlyFormsSystem: React.FC = () => {
     }
     return numeric.toFixed(2);
   };
-  const [positionsPayInto, setPositionsPayInto] = useState<string[]>(['Server']);
-  const [tipDivision, setTipDivision] = useState<string>('Equally regardless of hours worked');
-  const [positionsPaidFromSales, setPositionsPaidFromSales] = useState<string[]>([]);
-  const [positionsPaidFromTips, setPositionsPaidFromTips] = useState<string[]>(['Host', 'Bartender', 'Bus person/Busser']);
-  const [flatRatePositions, setFlatRatePositions] = useState<string[]>(['House Account']);
-  const [flatRateAmount, setFlatRateAmount] = useState<string>('1.66');
-  const [flatRateType, setFlatRateType] = useState<'divided' | 'individual' | 'perHour'>('individual');
-  const [tipPercentages, setTipPercentages] = useState<Record<string, number>>({});
-  const [newPayIntoPosition, setNewPayIntoPosition] = useState<string>('');
-  const [newPaidFromTipsPosition, setNewPaidFromTipsPosition] = useState<string>('');
-  const [newFlatRatePosition, setNewFlatRatePosition] = useState<string>('');
   const [payoutContributors, setPayoutContributors] = useState<string[]>([]);
   const [isPayoutDropdownOpen, setIsPayoutDropdownOpen] = useState<boolean>(false);
   const [payoutContributorSearch, setPayoutContributorSearch] = useState<string>('');
@@ -271,16 +216,6 @@ const GratlyFormsSystem: React.FC = () => {
     };
     fetchJobTitles();
   }, [restaurantKey, userId]);
-
-  useEffect(() => {
-    setTipPercentages((prev) => {
-      const next: Record<string, number> = {};
-      positionsPaidFromTips.forEach((position) => {
-        next[position] = typeof prev[position] === 'number' ? prev[position] : 0;
-      });
-      return next;
-    });
-  }, [positionsPaidFromTips]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -570,35 +505,6 @@ const GratlyFormsSystem: React.FC = () => {
     );
   };
 
-  const removePosition = (position: string, setter: React.Dispatch<React.SetStateAction<string[]>>) => {
-    setter(prev => prev.filter(p => p !== position));
-  };
-
-  const addPosition = (
-    position: string,
-    setter: React.Dispatch<React.SetStateAction<string[]>>,
-    resetter: React.Dispatch<React.SetStateAction<string>>
-  ) => {
-    const trimmed = position.trim();
-    if (!trimmed) {
-      return;
-    }
-    setter((prev) => (prev.includes(trimmed) ? prev : [...prev, trimmed]));
-    resetter('');
-  };
-
-  const updateTipPercentage = (position: string, value: string) => {
-    const numericValue = Number(value);
-    setTipPercentages((prev) => ({
-      ...prev,
-      [position]: Number.isFinite(numericValue) ? numericValue : 0
-    }));
-  };
-
-  const tipPercentageTotal = positionsPaidFromTips.reduce((sum, position) => {
-    const value = tipPercentages[position] ?? 0;
-    return sum + value;
-  }, 0);
   const payoutPercentTargets = Array.from(
     new Set([...payoutContributors, ...payoutReceivers])
   );
@@ -612,20 +518,7 @@ const GratlyFormsSystem: React.FC = () => {
     setEndDate('');
     setStartTime('');
     setEndTime('');
-    setOrderCalculation('opened');
-    setTipPoolType('individual');
     setFundsFrom((prev) => prev.map((fund) => ({ ...fund, selected: true, percentage: 100 })));
-    setPositionsPayInto(['Server']);
-    setTipDivision('Equally regardless of hours worked');
-    setPositionsPaidFromSales([]);
-    setPositionsPaidFromTips(['Host', 'Bartender', 'Bus person/Busser']);
-    setTipPercentages({});
-    setFlatRatePositions(['House Account']);
-    setFlatRateAmount('1.66');
-    setFlatRateType('individual');
-    setNewPayIntoPosition('');
-    setNewPaidFromTipsPosition('');
-    setNewFlatRatePosition('');
     setPayoutContributors([]);
     setPayoutReceivers([]);
     setReceiverPercentages({});

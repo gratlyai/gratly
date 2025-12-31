@@ -3,6 +3,7 @@ import {
   approvePayoutSchedule,
   fetchApprovals,
   saveApprovalOverrides,
+  type ApprovalContributor,
   type ApprovalsResponse,
   type ApprovalScheduleWithContributors,
 } from "../api/approvals";
@@ -70,7 +71,7 @@ export default function Reconciliation() {
   const [userId, setUserId] = useState<number | null>(null);
   const [schedules, setSchedules] = useState<ApprovalScheduleWithContributors[]>([]);
   const [expandedScheduleKeys, setExpandedScheduleKeys] = useState<Set<string>>(new Set());
-  const scheduleRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const scheduleRefs = useRef<Record<string, HTMLElement | null>>({});
   const [expandedEmployees, setExpandedEmployees] = useState<Record<string, boolean>>({});
   const [editingScheduleKey, setEditingScheduleKey] = useState<string | null>(null);
   const [resetToken, setResetToken] = useState(0);
@@ -253,7 +254,6 @@ export default function Reconciliation() {
     const contributors = schedule.contributors.filter(
       (contributor) => (contributor.isContributor || "").toLowerCase() === "yes",
     );
-    const scheduleKey = `${schedule.payoutScheduleId}-${schedule.businessDate}`;
     const receiverRolePercentages = schedule.receiverRoles.reduce((acc, role) => {
       const roleKey = normalizeRoleKey(role.receiverId);
       acc[roleKey] = Number(role.payoutPercentage || 0);
@@ -267,11 +267,6 @@ export default function Reconciliation() {
       acc[roleKey] = (acc[roleKey] ?? 0) + 1;
       return acc;
     }, {} as Record<string, number>);
-    const eligibleContributors = contributors.filter((contributor) => {
-      const tipTotal =
-        Number(contributor.totalTips || 0) + Number(contributor.totalGratuity || 0);
-      return tipTotal > 0;
-    });
     const totalReceiverPercentage = getReceiverPercentSum(schedule);
     const { overallTips, overallGratuity } = getOverallBase(schedule);
 
@@ -726,11 +721,6 @@ export default function Reconciliation() {
                             const firstB = (b.employeeName || "").trim().split(/\s+/)[0] || "";
                             return firstA.localeCompare(firstB, undefined, { sensitivity: "base" });
                           });
-                        const eligibleContributors = contributors.filter((contributor) => {
-                          const tipTotal =
-                            Number(contributor.totalTips || 0) + Number(contributor.totalGratuity || 0);
-                          return tipTotal > 0;
-                        });
                         const receivers = schedule.contributors
                           .filter((contributor) => contributor.isContributor === "No")
                           .slice()
@@ -755,7 +745,6 @@ export default function Reconciliation() {
                         const totalReceiverPercentage = getReceiverPercentSum(schedule);
                         const { overallTips: scheduleOverallTips, overallGratuity: scheduleOverallGratuity } =
                           getOverallBase(schedule);
-                        const ordered = [...contributors, ...receivers];
                         const missingRoles = getMissingRoles(schedule);
                         const customEntries = customReceivers[scheduleKey] ?? [];
                         return (
@@ -1281,7 +1270,7 @@ export default function Reconciliation() {
                                                   <div />
                                                 </div>
                                                 {editingScheduleKey === scheduleKey
-                                                  ? (roleSlots.length ? roleSlots : ["slot-0"]).map((slotId, slotIndex) => (
+                                                  ? (roleSlots.length ? roleSlots : ["slot-0"]).map((slotId) => (
                                                       <div
                                                         key={`${roleKey}-${slotId}`}
                                                         className="mt-3 grid items-center gap-2 grid-cols-[minmax(0,1fr)_minmax(220px,1fr)_minmax(160px,auto)_minmax(160px,auto)]"

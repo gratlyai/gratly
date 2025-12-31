@@ -16,11 +16,9 @@ type Status = "idle" | "loading" | "ready" | "saving" | "success" | "error";
 
 function SetupIntentForm({
   restaurantId,
-  clientSecret,
   onSaved,
 }: {
   restaurantId: number;
-  clientSecret: string;
   onSaved: (paymentMethodId: string) => Promise<void>;
 }) {
   const stripe = useStripe();
@@ -264,7 +262,6 @@ export default function Subscription() {
           <Elements stripe={stripePromise} options={elementsOptions}>
             <SetupIntentForm
               restaurantId={restaurantId}
-              clientSecret={clientSecret}
               onSaved={handleSaved}
             />
           </Elements>

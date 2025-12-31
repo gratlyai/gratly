@@ -19,6 +19,7 @@ export type ApprovalContributor = {
   overallGratuity: number;
   payoutTips: number;
   payoutGratuity: number;
+  netPayout?: number;
   orderCount?: number;
 };
 

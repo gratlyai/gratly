@@ -40,7 +40,6 @@ const buildFallbackProfile = (): UserProfile => {
 const GratlyProfilePage: React.FC = () => {
   const navigate = useNavigate();
   const { restaurantKey, employeeId } = useParams();
-  const [logoData, setLogoData] = useState<string>('');
   const [isEditing, setIsEditing] = useState<boolean>(false);
   const [profile, setProfile] = useState<UserProfile>(() => buildFallbackProfile());
   const [editedProfile, setEditedProfile] = useState<UserProfile>(() => buildFallbackProfile());
@@ -83,21 +82,6 @@ const GratlyProfilePage: React.FC = () => {
     const country = card.country ? `, ${card.country}` : "";
     return `${brand} ${last4} exp ${expMonth}/${expYear}${funding}${country}`;
   };
-
-  useEffect(() => {
-    const loadLogo = async (): Promise<void> => {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const data = await (window as any).fs.readFile('image.png');
-        const blob = new Blob([data], { type: 'image/png' });
-        const url = URL.createObjectURL(blob);
-        setLogoData(url);
-      } catch (error) {
-        console.error('Error loading logo:', error);
-      }
-    };
-    loadLogo();
-  }, []);
 
   useEffect(() => {
     const storedUserId = localStorage.getItem("userId");

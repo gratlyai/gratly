@@ -33,7 +33,6 @@ export default function Employees() {
   const [inviteErrors, setInviteErrors] = useState<Record<string, string>>({});
   const isInactive = (status: string) => status.trim().toLowerCase() === "inactive";
   const activeEmployees = employees.filter((employee) => !isInactive(employee.is_active));
-  const inactiveEmployees = employees.filter((employee) => isInactive(employee.is_active));
   const visibleEmployees = showAllEmployees ? employees : activeEmployees;
 
   useEffect(() => {
