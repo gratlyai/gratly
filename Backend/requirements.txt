@@ -1,2 +1,8 @@
+fastapi
+gunicorn
 passlib[bcrypt]
+pydantic
+pymysql
+python-dotenv
 stripe
+uvicorn
