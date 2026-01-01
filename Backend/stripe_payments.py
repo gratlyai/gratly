@@ -119,6 +119,35 @@ def _get_stripe_module():
         ) from exc
 
 
+def _fetch_restaurant_id_for_employee(employee_guid: str) -> Optional[int]:
+    cursor = _get_cursor(dictionary=True)
+    try:
+        cursor.execute(
+            """
+            SELECT ob.RESTAURANTID AS restaurant_id
+            FROM GRATLYDB.SRC_EMPLOYEES se
+            JOIN GRATLYDB.SRC_ONBOARDING ob ON se.RESTAURANTGUID = ob.RESTAURANTGUID
+            WHERE se.EMPLOYEEGUID = %s
+            LIMIT 1
+            """,
+            (employee_guid,),
+        )
+        row = cursor.fetchone()
+        return row["restaurant_id"] if row else None
+    finally:
+        cursor.close()
+
+
+def _build_connect_url(template: str, restaurant_id: Optional[int]) -> str:
+    if restaurant_id is None:
+        return template
+    return (
+        template.replace("{restaurantId}", str(restaurant_id))
+        .replace("{restaurant_id}", str(restaurant_id))
+        .replace("{restaurantKey}", str(restaurant_id))
+    )
+
+
 def _parse_signature_header(signature_header: str) -> Optional[Tuple[int, List[str]]]:
     timestamp = None
     signatures: List[str] = []
@@ -1738,7 +1767,7 @@ def create_onboarding_link(employee_guid: str):
         raise HTTPException(status_code=500, detail="Stripe secret key not configured")
 
     refresh_url = os.getenv("STRIPE_CONNECT_REFRESH_URL")
-    return_url = os.getenv("STRIPE_CONNECT_RETURN_URL") or "http://localhost:5173/business/100/home"
+    return_url = os.getenv("STRIPE_CONNECT_RETURN_URL") or "http://localhost:5173/business/{restaurantId}/home"
     if not refresh_url or not return_url:
         raise HTTPException(
             status_code=500,
@@ -1746,6 +1775,9 @@ def create_onboarding_link(employee_guid: str):
         )
 
     _assert_employee_exists(employee_guid)
+    restaurant_id = _fetch_restaurant_id_for_employee(employee_guid)
+    refresh_url = _build_connect_url(refresh_url, restaurant_id)
+    return_url = _build_connect_url(return_url, restaurant_id)
 
     stripe.api_key = stripe_secret_key
     account_id = _fetch_connected_account_id(employee_guid)
