@@ -135,7 +135,11 @@ const GratlySignUp: React.FC = () => {
     const loadLogo = async (): Promise<void> => {
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const data = await (window as any).fs.readFile('image.png');
+        const fs = (window as any).fs;
+        if (!fs?.readFile) {
+          return;
+        }
+        const data = await fs.readFile('image.png');
         const blob = new Blob([data], { type: 'image/png' });
         const url = URL.createObjectURL(blob);
         setLogoData(url);
