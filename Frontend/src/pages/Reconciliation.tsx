@@ -251,9 +251,6 @@ export default function Reconciliation() {
     const receivers = schedule.contributors.filter(
       (contributor) => (contributor.isContributor || "").toLowerCase() === "no",
     );
-    const contributors = schedule.contributors.filter(
-      (contributor) => (contributor.isContributor || "").toLowerCase() === "yes",
-    );
     const receiverRolePercentages = schedule.receiverRoles.reduce((acc, role) => {
       const roleKey = normalizeRoleKey(role.receiverId);
       acc[roleKey] = Number(role.payoutPercentage || 0);
