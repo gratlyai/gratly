@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import gratlyLogo from './assets/gratlylogodash.png';
 import { fetchUserPermissions } from "./api/permissions";
 import { getStoredPermissions } from "./auth/permissions";
+import { API_BASE_URL } from "./api/client";
 
 
 const GratlyLogin: React.FC = () => {
@@ -17,7 +18,11 @@ const GratlyLogin: React.FC = () => {
     const loadLogo = async (): Promise<void> => {
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const data = await (window as any).fs.readFile('image.png');
+        const fs = (window as any).fs;
+        if (!fs?.readFile) {
+          return;
+        }
+        const data = await fs.readFile('image.png');
         const blob = new Blob([data], { type: 'image/png' });
         const url = URL.createObjectURL(blob);
         setLogoData(url);
@@ -62,7 +67,7 @@ const handleLogin = async () => {
   try {
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), 10000);
-    const res = await fetch("http://127.0.0.1:8000/login", {
+    const res = await fetch(`${API_BASE_URL}/login`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

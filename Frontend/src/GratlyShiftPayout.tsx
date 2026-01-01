@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { API_BASE_URL } from "./api/client";
 
 type View = 'existing' | 'create';
 
@@ -203,7 +204,7 @@ const GratlyFormsSystem: React.FC = () => {
       }
       setJobTitlesError('');
       try {
-        const res = await fetch(`http://127.0.0.1:8000/job-titles?user_id=${userId}`);
+        const res = await fetch(`${API_BASE_URL}/job-titles?user_id=${userId}`);
         if (!res.ok) {
           throw new Error(`Failed to fetch job titles (${res.status})`);
         }
@@ -285,7 +286,7 @@ const GratlyFormsSystem: React.FC = () => {
       if (Number.isFinite(numericRestaurantId)) {
         params.set('restaurant_id', String(numericRestaurantId));
       }
-      const res = await fetch(`http://127.0.0.1:8000/payout-schedules?${params.toString()}`);
+      const res = await fetch(`${API_BASE_URL}/payout-schedules?${params.toString()}`);
       if (!res.ok) {
         throw new Error(`Failed to fetch schedules (${res.status})`);
       }
@@ -356,7 +357,7 @@ const GratlyFormsSystem: React.FC = () => {
     setScheduleDetailsError('');
     try {
       const res = await fetch(
-        `http://127.0.0.1:8000/payout-schedules/${scheduleId}?user_id=${userId}`
+        `${API_BASE_URL}/payout-schedules/${scheduleId}?user_id=${userId}`
       );
       if (!res.ok) {
         throw new Error(`Failed to fetch schedule (${res.status})`);
@@ -468,7 +469,7 @@ const GratlyFormsSystem: React.FC = () => {
     setDeleteScheduleSuccess('');
     try {
       const res = await fetch(
-        `http://127.0.0.1:8000/payout-schedules/${selectedScheduleId}?user_id=${userId}`,
+        `${API_BASE_URL}/payout-schedules/${selectedScheduleId}?user_id=${userId}`,
         { method: 'DELETE' }
       );
       if (!res.ok) {
@@ -621,8 +622,8 @@ const GratlyFormsSystem: React.FC = () => {
 
     const isEditing = editingScheduleId !== null;
     const endpoint = isEditing
-      ? `http://127.0.0.1:8000/payout-schedules/${editingScheduleId}`
-      : 'http://127.0.0.1:8000/payout-schedules';
+      ? `${API_BASE_URL}/payout-schedules/${editingScheduleId}`
+      : `${API_BASE_URL}/payout-schedules`;
     const method = isEditing ? 'PUT' : 'POST';
 
     try {
