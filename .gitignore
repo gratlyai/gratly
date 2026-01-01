@@ -1,2 +1,4 @@
 Backend/.env
 Backend/.env
+# Lambda build artifact
+DB/getalldata_lambda.zip

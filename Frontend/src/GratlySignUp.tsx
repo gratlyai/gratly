@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from "react-router-dom";
 import gratlyLogo from './assets/gratlylogodash.png';
+import { API_BASE_URL } from "./api/client";
 
 
 const GratlySignUp: React.FC = () => {
@@ -165,7 +166,7 @@ const handleSignUp = async () => {
         password,
         ...(inviteToken ? { inviteToken } : {}),
       };
-      const res = await fetch("http://127.0.0.1:8000/signup", {
+      const res = await fetch(`${API_BASE_URL}/signup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
