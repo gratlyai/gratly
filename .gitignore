@@ -2,3 +2,7 @@ Backend/.env
 Backend/.env
 # Lambda build artifact
 DB/getalldata_lambda.zip
+.DS_Store
+DB/getalldata.zip
+DB/getalldata-layer.zip
+DB/package/
