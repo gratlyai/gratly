@@ -84,7 +84,13 @@ def _run_sql_script(cursor, script_path: str) -> None:
     for statement in cleaned.split(";"):
         stmt = statement.strip()
         if stmt:
-            cursor.execute(stmt)
+            try:
+                cursor.execute(stmt)
+            except pymysql.err.OperationalError as err:
+                # Ignore already-exists errors for non-idempotent statements.
+                if err.args and err.args[0] in (1050, 1060, 1061):
+                    continue
+                raise
 
 def _build_migration_key(script_path: str) -> str:
     with open(script_path, "rb") as handle:
@@ -100,6 +106,7 @@ def _apply_scripts_sql_once() -> None:
     conn = _get_migration_connection()
     cursor = conn.cursor()
     try:
+        cursor.execute("SELECT GET_LOCK('gratly_migrations', 30)")
         cursor.execute("CREATE DATABASE IF NOT EXISTS GRATLYDB")
         cursor.execute(
             """
@@ -130,6 +137,10 @@ def _apply_scripts_sql_once() -> None:
         )
         print(f"Migration {migration_key} applied successfully.")
     finally:
+        try:
+            cursor.execute("SELECT RELEASE_LOCK('gratly_migrations')")
+        except pymysql.MySQLError:
+            pass
         cursor.close()
         conn.close()
 

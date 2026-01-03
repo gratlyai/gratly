@@ -322,7 +322,14 @@ const handleLogin = async () => {
 
         {/* Footer Text */}
         <p className="text-center text-sm text-gray-600 mt-6">
-          By continuing, you agree to Gratly's Terms of Service and Privacy Policy
+          By continuing, you agree to Gratly's{" "}
+          <a className="text-gray-900 underline hover:text-gray-700" href="/terms.html">
+            Terms of Service
+          </a>{" "}
+          and{" "}
+          <a className="text-gray-900 underline hover:text-gray-700" href="/privacy.html">
+            Privacy Policy
+          </a>
         </p>
       </div>
     </div>
