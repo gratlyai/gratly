@@ -5,8 +5,10 @@ from pydantic import BaseModel
 
 try:
     from Backend.db import _get_cursor, _fetch_restaurant_guid, _fetch_restaurant_key
+    from Backend.payment_routing import _fetch_payment_provider, _is_payment_routing_set
 except ImportError:
     from db import _get_cursor, _fetch_restaurant_guid, _fetch_restaurant_key
+    from payment_routing import _fetch_payment_provider, _is_payment_routing_set
 
 router = APIRouter()
 
@@ -864,10 +866,23 @@ def approve_payout_schedule(payload: ApprovalFinalizePayload):
         debit_result = None
         debit_error = None
         try:
-            try:
-                from Backend.stripe_payments import _create_restaurant_debit_for_settlement
-            except ImportError:
-                from stripe_payments import _create_restaurant_debit_for_settlement
+            if not _is_payment_routing_set(int(payload.restaurantId)):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Payment routing must be set before approving payouts",
+                )
+            payment_provider = _fetch_payment_provider(int(payload.restaurantId))
+            if payment_provider == "astra":
+                try:
+                    from Backend.astra_payments import _create_restaurant_debit_for_settlement
+                except ImportError:
+                    from astra_payments import _create_restaurant_debit_for_settlement
+            else:
+                try:
+                    from Backend.stripe_payments import _create_restaurant_debit_for_settlement
+                except ImportError:
+                    from stripe_payments import _create_restaurant_debit_for_settlement
+
             debit_result = _create_restaurant_debit_for_settlement(
                 settlement_id=str(row["approval_id"]),
                 restaurant_id=int(payload.restaurantId),

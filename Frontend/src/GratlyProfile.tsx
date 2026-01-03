@@ -8,7 +8,13 @@ import {
   fetchEmployees,
   type StripeConnectedAccount,
 } from "./api/employees";
-import { getStoredPermissions, permissionConfig, type PermissionState } from "./auth/permissions";
+import {
+  getStoredPermissions,
+  permissionConfig,
+  type PermissionDescriptor,
+  type PermissionState,
+} from "./auth/permissions";
+import { fetchPermissionCatalog } from "./api/permissions";
 
 interface UserProfile {
   firstName: string;
@@ -47,6 +53,8 @@ const GratlyProfilePage: React.FC = () => {
   const [permissions, setPermissions] = useState<PermissionState>(() =>
     getStoredPermissions(localStorage.getItem("userId")),
   );
+  const [permissionCatalog, setPermissionCatalog] =
+    useState<PermissionDescriptor[]>(permissionConfig);
   const [showSavedToast, setShowSavedToast] = useState<boolean>(false);
   const [saveError, setSaveError] = useState<string>("");
   const [isSaving, setIsSaving] = useState<boolean>(false);
@@ -179,6 +187,22 @@ const GratlyProfilePage: React.FC = () => {
   useEffect(() => {
     const storedUserId = localStorage.getItem("userId");
     setPermissions(getStoredPermissions(storedUserId));
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+    fetchPermissionCatalog()
+      .then((data) => {
+        if (isMounted && data.length) {
+          setPermissionCatalog(data);
+        }
+      })
+      .catch(() => {
+        // Keep static permissions on failure.
+      });
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const handleEdit = () => {
@@ -442,7 +466,7 @@ const GratlyProfilePage: React.FC = () => {
                   </label>
                   <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
                     <div className="grid grid-cols-2 gap-3">
-                      {permissionConfig.map((permission) => (
+                      {permissionCatalog.map((permission) => (
                         <label
                           key={permission.key}
                           className={`flex items-center gap-3 p-3 rounded-lg transition-all cursor-default ${

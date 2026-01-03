@@ -71,7 +71,9 @@ const AppLayout: React.FC = () => {
   const [permissions, setPermissions] = useState<PermissionState>(() =>
     getStoredPermissions(activeEmployeeId),
   );
-  const isAdminUser = permissions.adminAccess;
+  const [permissionsLoaded, setPermissionsLoaded] = useState<boolean>(false);
+  const isAdminUser = permissions.adminAccess || permissions.superadminAccess;
+  const isSuperAdmin = permissions.superadminAccess;
   const isBusinessUser =
     isAdminUser ||
     permissions.managerAccess ||
@@ -91,6 +93,7 @@ const AppLayout: React.FC = () => {
     }
     const numericUserId = Number(activeEmployeeId);
     if (!Number.isFinite(numericUserId) || numericUserId <= 0) {
+      setPermissionsLoaded(true);
       return () => {
         isMounted = false;
       };
@@ -102,9 +105,11 @@ const AppLayout: React.FC = () => {
         }
         setPermissions({ ...nextPermissions, ...data });
         localStorage.setItem(`employeePermissions:${numericUserId}`, JSON.stringify(data));
+        setPermissionsLoaded(true);
       })
       .catch(() => {
         // Keep local storage permissions if the API is unavailable.
+        setPermissionsLoaded(true);
       });
     return () => {
       isMounted = false;
@@ -137,7 +142,7 @@ const AppLayout: React.FC = () => {
       return permissions.managerAccess || permissions.manageTeam;
     }
     if (key === "settings") {
-      return false;
+      return isSuperAdmin;
     }
     return false;
   };
@@ -286,6 +291,9 @@ const AppLayout: React.FC = () => {
 
   useEffect(() => {
     if (!location.pathname.startsWith(basePath)) {
+      return;
+    }
+    if (!permissionsLoaded) {
       return;
     }
     const pathSegment = location.pathname

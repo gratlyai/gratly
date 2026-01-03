@@ -3,12 +3,15 @@ export type PermissionKey =
   | "approvePayouts"
   | "manageTeam"
   | "adminAccess"
+  | "superadminAccess"
   | "managerAccess"
   | "employeeOnly";
 
 export type PermissionState = Record<PermissionKey, boolean>;
 
-export const permissionConfig: { key: PermissionKey; label: string }[] = [
+export type PermissionDescriptor = { key: PermissionKey; label: string };
+
+export const permissionConfig: PermissionDescriptor[] = [
   { key: "createPayoutSchedules", label: "Create Payout Schedules" },
   { key: "approvePayouts", label: "Approve Payouts" },
   { key: "manageTeam", label: "Manage Team" },
@@ -22,6 +25,7 @@ export const defaultEmployeePermissions: PermissionState = {
   approvePayouts: false,
   manageTeam: false,
   adminAccess: false,
+  superadminAccess: false,
   managerAccess: false,
   employeeOnly: true,
 };
@@ -50,6 +54,9 @@ export const hasPermission = (
     return true;
   }
   if (permissions.adminAccess) {
+    return true;
+  }
+  if (permissions.superadminAccess) {
     return true;
   }
   return Boolean(permissions[permission]);

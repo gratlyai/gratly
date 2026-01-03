@@ -2,11 +2,16 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import type { Employee, StripeConnectedAccountSummary } from "../api/employees";
 import { fetchEmployee, fetchStripeConnectedAccount } from "../api/employees";
-import { fetchUserPermissions, updateUserPermissions } from "../api/permissions";
+import {
+  fetchPermissionCatalog,
+  fetchUserPermissions,
+  updateUserPermissions,
+} from "../api/permissions";
 import {
   defaultEmployeePermissions,
   getStoredPermissions,
   permissionConfig,
+  type PermissionDescriptor,
   type PermissionState,
 } from "../auth/permissions";
 
@@ -45,6 +50,8 @@ export default function EmployeeProfile() {
   const [employee, setEmployee] = useState<Employee | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [permissions, setPermissions] = useState<PermissionState>(defaultEmployeePermissions);
+  const [permissionCatalog, setPermissionCatalog] =
+    useState<PermissionDescriptor[]>(permissionConfig);
   const [isSavingPermissions, setIsSavingPermissions] = useState(false);
   const [stripeAccount, setStripeAccount] = useState<StripeConnectedAccountSummary | null>(null);
   const [currentUserPermissions] = useState<PermissionState>(() =>
@@ -154,6 +161,22 @@ export default function EmployeeProfile() {
     localStorage.setItem(storageKey, JSON.stringify(permissions));
   }, [permissions, storageKey]);
 
+  useEffect(() => {
+    let isMounted = true;
+    fetchPermissionCatalog()
+      .then((data) => {
+        if (isMounted && data.length) {
+          setPermissionCatalog(data);
+        }
+      })
+      .catch(() => {
+        // Keep static permissions on failure.
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   const handlePermissionChange = async (permissionKey: keyof PermissionState, checked: boolean) => {
     const nextPermissions = { ...permissions, [permissionKey]: checked };
     const previousPermissions = permissions;
@@ -251,7 +274,7 @@ export default function EmployeeProfile() {
           <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm lg:col-span-2">
             <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-gray-500">Permissions</h2>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {permissionConfig.map((permission) => (
+              {permissionCatalog.map((permission) => (
                 <label
                   key={permission.key}
                   className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-medium text-gray-700"

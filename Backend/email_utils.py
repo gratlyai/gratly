@@ -15,6 +15,7 @@ def send_sendgrid_email(
     content: str,
     sender_name: Optional[str] = None,
     html_content: Optional[str] = None,
+    reply_to: Optional[str] = None,
 ):
     api_key = _get_env_or_ini("SENDGRID_API_KEY")
     from_email = _get_env_or_ini("SENDGRID_FROM_EMAIL")
@@ -31,6 +32,8 @@ def send_sendgrid_email(
         "subject": subject,
         "content": contents,
     }
+    if reply_to:
+        payload["reply_to"] = {"email": reply_to}
     request = urllib.request.Request(
         "https://api.sendgrid.com/v3/mail/send",
         data=json.dumps(payload).encode("utf-8"),

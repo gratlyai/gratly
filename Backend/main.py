@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import hashlib
+import os
 import secrets
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,12 +23,14 @@ if __package__:
         _fetch_restaurant_id_for_email,
         _get_env_or_ini,
         PERMISSION_LABELS,
+        PERMISSION_NAME_TO_KEY,
     )
     from .payout_schedules import router as payout_schedules_router
     from .password_reset import router as password_reset_router
     from .approvals import router as approvals_router
     from .reports import router as reports_router
     from .stripe_payments import router as stripe_payments_router
+    from .payment_routing import router as payment_routing_router
 else:
     from security import hash_password, verify_password
     from email_utils import send_sendgrid_email
@@ -43,14 +46,92 @@ else:
         _fetch_restaurant_id_for_email,
         _get_env_or_ini,
         PERMISSION_LABELS,
+        PERMISSION_NAME_TO_KEY,
     )
     from payout_schedules import router as payout_schedules_router
     from password_reset import router as password_reset_router
     from approvals import router as approvals_router
     from reports import router as reports_router
     from stripe_payments import router as stripe_payments_router
+    from payment_routing import router as payment_routing_router
 
 app = FastAPI()
+
+def _should_run_migrations() -> bool:
+    raw = (_get_env_or_ini("RUN_DB_MIGRATIONS") or "").strip().lower()
+    return raw in ("1", "true", "yes", "y")
+
+def _get_migration_connection():
+    config = {
+        "host": _get_env_or_ini("DB_HOST"),
+        "user": _get_env_or_ini("DB_USER"),
+        "password": _get_env_or_ini("DB_PASSWORD"),
+        "autocommit": True,
+    }
+    db_name = _get_env_or_ini("DB_NAME")
+    if db_name:
+        config["database"] = db_name
+    return pymysql.connect(**config)
+
+def _run_sql_script(cursor, script_path: str) -> None:
+    with open(script_path, "r", encoding="utf-8") as handle:
+        lines = []
+        for line in handle:
+            if line.lstrip().startswith("--"):
+                continue
+            lines.append(line)
+    cleaned = "".join(lines)
+    for statement in cleaned.split(";"):
+        stmt = statement.strip()
+        if stmt:
+            cursor.execute(stmt)
+
+def _build_migration_key(script_path: str) -> str:
+    with open(script_path, "rb") as handle:
+        digest = hashlib.sha256(handle.read()).hexdigest()
+    return f"scripts_sql_{digest[:12]}"
+
+def _apply_scripts_sql_once() -> None:
+    script_path = os.path.join(os.path.dirname(__file__), "..", "DB", "scripts.sql")
+    if not os.path.exists(script_path):
+        raise RuntimeError(f"Migration script not found at {script_path}")
+    migration_key = _build_migration_key(script_path)
+
+    conn = _get_migration_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("CREATE DATABASE IF NOT EXISTS GRATLYDB")
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS GRATLYDB.MIGRATIONS (
+                ID INT AUTO_INCREMENT PRIMARY KEY,
+                MIGRATION_KEY VARCHAR(128) NOT NULL UNIQUE,
+                APPLIED_AT TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cursor.execute(
+            """
+            SELECT 1
+            FROM GRATLYDB.MIGRATIONS
+            WHERE MIGRATION_KEY = %s
+            LIMIT 1
+            """,
+            (migration_key,),
+        )
+        if cursor.fetchone():
+            print(f"Migration {migration_key} already applied; skipping.")
+            return
+        print(f"Applying migration {migration_key} from scripts.sql.")
+        _run_sql_script(cursor, script_path)
+        cursor.execute(
+            "INSERT INTO GRATLYDB.MIGRATIONS (MIGRATION_KEY) VALUES (%s)",
+            (migration_key,),
+        )
+        print(f"Migration {migration_key} applied successfully.")
+    finally:
+        cursor.close()
+        conn.close()
 
 def _get_cors_origins() -> List[str]:
     raw = _get_env_or_ini("CORS_ORIGINS")
@@ -72,6 +153,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+def _run_startup_migrations() -> None:
+    if not _should_run_migrations():
+        return
+    _apply_scripts_sql_once()
+
 @app.get("/healthz")
 def healthcheck():
     return {"status": "ok"}
@@ -81,6 +168,7 @@ app.include_router(password_reset_router)
 app.include_router(approvals_router)
 app.include_router(reports_router)
 app.include_router(stripe_payments_router)
+app.include_router(payment_routing_router)
 
 print("DB HOST:", _get_env_or_ini("DB_HOST"))
 print("DB USER:", _get_env_or_ini("DB_USER"))
@@ -434,6 +522,19 @@ def _create_team_invite_token(cursor, invite_id: int, restaurant_id: int) -> str
     )
     return token
 
+def _create_team_invite_token_with_value(cursor, invite_id: int, restaurant_id: int, token: str) -> str:
+    _ensure_team_invite_token_table(cursor)
+    token_hash = _hash_invite_token(token)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=INVITE_TOKEN_TTL_HOURS)
+    cursor.execute(
+        """
+        INSERT INTO GRATLYDB.TEAM_INVITE_TOKENS (INVITEID, RESTAURANTID, TOKEN_HASH, EXPIRES_AT)
+        VALUES (%s, %s, %s, %s)
+        """,
+        (invite_id, restaurant_id, token_hash, expires_at),
+    )
+    return token
+
 def _get_valid_team_invite(cursor, token: str, email: str) -> dict:
     _ensure_team_invite_token_table(cursor)
     token_hash = _hash_invite_token(token)
@@ -552,8 +653,29 @@ class UserPermissionsPayload(BaseModel):
     approvePayouts: bool
     manageTeam: bool
     adminAccess: bool
+    superadminAccess: bool
     managerAccess: bool
     employeeOnly: bool
+
+class PermissionDescriptor(BaseModel):
+    key: str
+    label: str
+
+class OnboardRestaurantPayload(BaseModel):
+    userId: int
+    restaurantGuid: str
+    secretKey: str
+    clientSecret: str
+    userAccessType: str
+    adminName: str
+    adminEmail: str
+    restaurantName: Optional[str] = None
+
+class OnboardRestaurantResponse(BaseModel):
+    success: bool
+    restaurantId: int
+    inviteId: int
+    signupLink: str
 
 class TeamInvitePayload(BaseModel):
     user_id: int
@@ -562,11 +684,23 @@ class TeamInvitePayload(BaseModel):
     last_name: Optional[str] = None
     employee_guid: Optional[str] = None
 
+class ContactPayload(BaseModel):
+    name: str
+    email: str
+    phone: Optional[str] = None
+    message: str
+
 class EmployeeJobResponse(BaseModel):
     employeeGuid: Optional[str] = None
     firstName: Optional[str] = None
     lastName: Optional[str] = None
     jobTitle: Optional[str] = None
+
+def _require_superadmin_access(user_id: int) -> None:
+    permission_names = _fetch_user_permission_names(user_id)
+    permissions = _serialize_permissions(permission_names) or {}
+    if not permissions.get("superadminAccess"):
+        raise HTTPException(status_code=403, detail="Superadmin access required")
 
 def _send_sendgrid_email(
     to_email: str,
@@ -574,6 +708,7 @@ def _send_sendgrid_email(
     content: str,
     sender_name: Optional[str] = None,
     html_content: Optional[str] = None,
+    reply_to: Optional[str] = None,
 ):
     send_sendgrid_email(
         to_email=to_email,
@@ -581,6 +716,7 @@ def _send_sendgrid_email(
         content=content,
         sender_name=sender_name,
         html_content=html_content,
+        reply_to=reply_to,
     )
 
 def _insert_invite_log(cursor, payload: TeamInvitePayload, status: str, provider_response: Optional[str] = None) -> int:
@@ -733,6 +869,165 @@ def send_team_invite(payload: TeamInvitePayload):
     except pymysql.MySQLError as err:
         conn.rollback()
         raise HTTPException(status_code=500, detail=f"Error logging invite: {err}")
+
+
+@app.post("/contact")
+def submit_contact(payload: ContactPayload):
+    name = payload.name.strip() if payload.name else ""
+    email = payload.email.strip() if payload.email else ""
+    message = payload.message.strip() if payload.message else ""
+    phone = payload.phone.strip() if payload.phone else ""
+
+    if not name or not email or not message:
+        raise HTTPException(status_code=400, detail="Name, email, and message are required")
+
+    subject = f"Gratly contact request from {name}"
+    content_lines = [
+        f"Name: {name}",
+        f"Email: {email}",
+        f"Phone: {phone}" if phone else "Phone: (not provided)",
+        "",
+        "Message:",
+        message,
+    ]
+    _send_sendgrid_email(
+        to_email="sandeep@gratly.ai",
+        subject=subject,
+        content="\n".join(content_lines),
+        sender_name="Gratly Contact",
+        reply_to=email,
+    )
+    _send_sendgrid_email(
+        to_email=email,
+        subject="We received your message",
+        content=(
+            "Thanks for reaching out to Gratly.\n\n"
+            "We received your message and will get back to you shortly.\n\n"
+            "Summary:\n"
+            f"Name: {name}\n"
+            f"Email: {email}\n"
+            f"Phone: {phone if phone else '(not provided)'}\n\n"
+            "Message:\n"
+            f"{message}\n"
+        ),
+        sender_name="Gratly",
+    )
+    return {"success": True}
+
+@app.post("/superadmin/onboard-restaurant", response_model=OnboardRestaurantResponse)
+def onboard_restaurant(payload: OnboardRestaurantPayload):
+    _require_superadmin_access(payload.userId)
+    if not payload.restaurantGuid:
+        raise HTTPException(status_code=400, detail="restaurantGuid is required")
+    if not payload.secretKey:
+        raise HTTPException(status_code=400, detail="secretKey is required")
+    if not payload.clientSecret:
+        raise HTTPException(status_code=400, detail="clientSecret is required")
+    if not payload.userAccessType:
+        raise HTTPException(status_code=400, detail="userAccessType is required")
+    if not payload.adminEmail:
+        raise HTTPException(status_code=400, detail="adminEmail is required")
+
+    cursor = _get_cursor(dictionary=True)
+    conn = cursor.connection
+    invite_id = None
+    try:
+        cursor.execute(
+            """
+            SELECT RESTAURANTID AS restaurant_id
+            FROM GRATLYDB.SRC_ONBOARDING
+            WHERE RESTAURANTGUID = %s
+            LIMIT 1
+            """,
+            (payload.restaurantGuid,),
+        )
+        existing = cursor.fetchone()
+        if existing:
+            raise HTTPException(status_code=400, detail="Restaurant already onboarded")
+
+        cursor.execute(
+            """
+            INSERT INTO GRATLYDB.SRC_ONBOARDING (
+                RESTAURANTGUID,
+                SECRETKEY,
+                CLIENTSECRET,
+                USERACCESSTYPE
+            )
+            VALUES (%s, %s, %s, %s)
+            """,
+            (
+                payload.restaurantGuid,
+                payload.secretKey,
+                payload.clientSecret,
+                payload.userAccessType,
+            ),
+        )
+        restaurant_id = cursor.lastrowid
+
+        restaurant_name = payload.restaurantName or f"Restaurant {payload.restaurantGuid}"
+        cursor.execute(
+            """
+            INSERT INTO GRATLYDB.SRC_RESTAURANTDETAILS (
+                RESTAURANTGUID,
+                RESTAURANTNAME
+            )
+            VALUES (%s, %s)
+            ON DUPLICATE KEY UPDATE
+                RESTAURANTNAME = COALESCE(VALUES(RESTAURANTNAME), RESTAURANTNAME)
+            """,
+            (payload.restaurantGuid, restaurant_name),
+        )
+
+        admin_name = (payload.adminName or "").strip()
+        first_name = admin_name.split(" ")[0] if admin_name else None
+        last_name = " ".join(admin_name.split(" ")[1:]) if admin_name else None
+        invite_payload = TeamInvitePayload(
+            user_id=payload.userId,
+            email=payload.adminEmail,
+            first_name=first_name,
+            last_name=last_name,
+            employee_guid=None,
+        )
+        invite_id = _insert_invite_log(cursor, invite_payload, "pending")
+        invite_token = _create_team_invite_token_with_value(
+            cursor,
+            invite_id,
+            restaurant_id,
+            payload.restaurantGuid,
+        )
+        signup_link = _build_invite_signup_link(invite_token)
+        text_content, html_content = _build_invite_email_content(
+            restaurant_name,
+            admin_name or payload.adminEmail,
+            signup_link,
+        )
+        conn.commit()
+        _send_sendgrid_email(
+            to_email=payload.adminEmail,
+            subject=f"You're invited to Gratly by {restaurant_name}",
+            content=text_content,
+            html_content=html_content,
+            sender_name=restaurant_name,
+        )
+        _update_invite_log(cursor, invite_id, "sent")
+        conn.commit()
+        return {
+            "success": True,
+            "restaurantId": restaurant_id,
+            "inviteId": invite_id,
+            "signupLink": signup_link,
+        }
+    except HTTPException as err:
+        if invite_id is not None:
+            try:
+                _update_invite_log(cursor, invite_id, "failed", err.detail)
+                conn.commit()
+            except pymysql.MySQLError:
+                conn.rollback()
+        raise
+    except pymysql.MySQLError as err:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error onboarding restaurant: {err}")
     finally:
         cursor.close()
 
@@ -1026,6 +1321,36 @@ def get_user_permissions(user_id: int):
     finally:
         cursor.close()
 
+@app.get("/permissions/catalog", response_model=List[PermissionDescriptor])
+def get_permission_catalog():
+    cursor = _get_cursor(dictionary=True)
+    try:
+        cursor.execute(
+            """
+            SELECT PERMISSIONSNAME AS permission_name, DISPLAY AS display
+            FROM GRATLYDB.MSTR_PERMISSIONS
+            WHERE DELETED IS NULL OR DELETED = 0
+            ORDER BY PERMISSIONSNAME
+            """
+        )
+        rows = cursor.fetchall()
+        results: List[PermissionDescriptor] = []
+        for row in rows:
+            name = row.get("permission_name")
+            if not name:
+                continue
+            if not int(row.get("display") or 0):
+                continue
+            key = PERMISSION_NAME_TO_KEY.get(name.strip().lower())
+            if not key:
+                continue
+            results.append({"key": key, "label": name})
+        return results
+    except pymysql.MySQLError as err:
+        raise HTTPException(status_code=500, detail=f"Error fetching permissions catalog: {err}")
+    finally:
+        cursor.close()
+
 @app.put("/user-permissions/{user_id}", response_model=UserPermissionsPayload)
 def update_user_permissions(user_id: int, payload: UserPermissionsPayload, actor_user_id: Optional[int] = None):
     cursor = _get_cursor(dictionary=True)
@@ -1036,8 +1361,17 @@ def update_user_permissions(user_id: int, payload: UserPermissionsPayload, actor
         actor_permissions = _serialize_permissions(actor_permission_names) or {}
         target_permission_names = _fetch_user_permission_names(user_id)
         target_permissions = _serialize_permissions(target_permission_names) or {}
-        if not actor_permissions.get("adminAccess") and payload.adminAccess != target_permissions.get("adminAccess"):
+        if (
+            not actor_permissions.get("adminAccess")
+            and not actor_permissions.get("superadminAccess")
+            and payload.adminAccess != target_permissions.get("adminAccess")
+        ):
             raise HTTPException(status_code=403, detail="Only admins can change admin access")
+        if (
+            not actor_permissions.get("superadminAccess")
+            and payload.superadminAccess != target_permissions.get("superadminAccess")
+        ):
+            raise HTTPException(status_code=403, detail="Only superadmins can change superadmin access")
         cursor.execute(
             "SELECT 1 FROM GRATLYDB.USER_MASTER WHERE USERID = %s LIMIT 1",
             (user_id,),
@@ -1054,6 +1388,8 @@ def update_user_permissions(user_id: int, payload: UserPermissionsPayload, actor
             permission_names.append(PERMISSION_LABELS["manageTeam"])
         if payload.adminAccess:
             permission_names.append(PERMISSION_LABELS["adminAccess"])
+        if payload.superadminAccess:
+            permission_names.append(PERMISSION_LABELS["superadminAccess"])
         if payload.managerAccess:
             permission_names.append(PERMISSION_LABELS["managerAccess"])
         if payload.employeeOnly:

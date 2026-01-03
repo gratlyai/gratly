@@ -242,6 +242,37 @@ try:
         "RESTAURANTGUID",
         "RESTAURANTGUID VARCHAR(36) FIRST",
     )
+    _ensure_column(
+        "MSTR_PERMISSIONS",
+        "DISPLAY",
+        "DISPLAY TINYINT(1) DEFAULT 1",
+    )
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS RESTAURANT_PAYMENT_ROUTING (
+            RESTAURANTGUID VARCHAR(36),
+            RESTAURANTID INT NOT NULL PRIMARY KEY,
+            PROVIDER VARCHAR(16) NOT NULL DEFAULT 'stripe',
+            UPDATED_BY_USERID INT,
+            UPDATED_AT DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                ON UPDATE CURRENT_TIMESTAMP
+        )
+    """)
+    _ensure_column(
+        "RESTAURANT_PAYMENT_ROUTING",
+        "RESTAURANTGUID",
+        "RESTAURANTGUID VARCHAR(36) FIRST",
+    )
+    _ensure_column(
+        "RESTAURANT_PAYMENT_ROUTING",
+        "PROVIDER",
+        "PROVIDER VARCHAR(16) NOT NULL DEFAULT 'stripe'",
+    )
+    _ensure_column(
+        "RESTAURANT_PAYMENT_ROUTING",
+        "UPDATED_BY_USERID",
+        "UPDATED_BY_USERID INT",
+    )
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS STRIPE_EMPLOYEE_CARRY_FORWARD (
@@ -406,6 +437,7 @@ PERMISSION_LABELS = {
     "approvePayouts": "Approve Payouts",
     "manageTeam": "Manage Team",
     "adminAccess": "Admin Access",
+    "superadminAccess": "Superadmin Access",
     "employeeOnly": "Employee Only",
     "managerAccess": "Manager Access",
 }
@@ -413,6 +445,7 @@ PERMISSION_LABELS = {
 PERMISSION_NAME_TO_KEY = {
     label.strip().lower(): key for key, label in PERMISSION_LABELS.items()
 }
+PERMISSION_NAME_TO_KEY["super admin access"] = "superadminAccess"
 
 def _normalize_permission_name(value: str) -> str:
     return value.strip().lower()
@@ -442,6 +475,7 @@ def _fetch_user_permission_flags(user_id: int) -> Optional[dict]:
         return None
     has_business_access = bool(
         permissions.get("adminAccess")
+        or permissions.get("superadminAccess")
         or permissions.get("managerAccess")
         or permissions.get("createPayoutSchedules")
         or permissions.get("approvePayouts")
