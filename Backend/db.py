@@ -73,7 +73,13 @@ try:
             ("GRATLYDB", table, column),
         )
         if not cursor.fetchone():
-            cursor.execute(f"ALTER TABLE GRATLYDB.{table} ADD COLUMN {ddl}")
+            try:
+                cursor.execute(f"ALTER TABLE GRATLYDB.{table} ADD COLUMN {ddl}")
+            except pymysql.err.OperationalError as err:
+                # Ignore duplicate column errors during concurrent startup.
+                if err.args and err.args[0] == 1060:
+                    return
+                raise
 
     def _ensure_index(table: str, index_name: str, columns: str) -> None:
         cursor.execute(
@@ -87,7 +93,13 @@ try:
             ("GRATLYDB", table, index_name),
         )
         if not cursor.fetchone():
-            cursor.execute(f"CREATE INDEX {index_name} ON GRATLYDB.{table} ({columns})")
+            try:
+                cursor.execute(f"CREATE INDEX {index_name} ON GRATLYDB.{table} ({columns})")
+            except pymysql.err.OperationalError as err:
+                # Ignore duplicate index errors during concurrent startup.
+                if err.args and err.args[0] in (1060, 1061):
+                    return
+                raise
 
     _ensure_column(
         "STRIPE_CONNECTED_ACCOUNTS",
