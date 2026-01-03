@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import os
 import secrets
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 import pymysql
 from pydantic import BaseModel
@@ -21,6 +21,9 @@ if __package__:
         _fetch_employee_guid_for_user,
         _serialize_permissions,
         _fetch_restaurant_id_for_email,
+        _fetch_restaurant_timezone,
+        set_request_timezone,
+        reset_request_timezone,
         _get_env_or_ini,
         PERMISSION_LABELS,
         PERMISSION_NAME_TO_KEY,
@@ -44,6 +47,9 @@ else:
         _fetch_employee_guid_for_user,
         _serialize_permissions,
         _fetch_restaurant_id_for_email,
+        _fetch_restaurant_timezone,
+        set_request_timezone,
+        reset_request_timezone,
         _get_env_or_ini,
         PERMISSION_LABELS,
         PERMISSION_NAME_TO_KEY,
@@ -163,6 +169,56 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def apply_request_timezone(request: Request, call_next):
+    timezone_value = None
+    restaurant_id = request.query_params.get("restaurant_id") or request.query_params.get("restaurantId")
+    restaurant_guid = request.query_params.get("restaurant_guid") or request.query_params.get("restaurantGuid")
+    user_id = request.query_params.get("user_id") or request.query_params.get("userId")
+
+    body_data = None
+    if request.headers.get("content-type", "").startswith("application/json"):
+        try:
+            body_data = await request.json()
+        except Exception:
+            body_data = None
+
+    if body_data and isinstance(body_data, dict):
+        restaurant_id = restaurant_id or body_data.get("restaurant_id") or body_data.get("restaurantId")
+        restaurant_guid = restaurant_guid or body_data.get("restaurant_guid") or body_data.get("restaurantGuid")
+        user_id = user_id or body_data.get("user_id") or body_data.get("userId")
+
+    restaurant_id_value = None
+    if restaurant_id is not None:
+        try:
+            restaurant_id_value = int(restaurant_id)
+        except (TypeError, ValueError):
+            restaurant_id_value = None
+
+    if restaurant_guid:
+        timezone_value = _fetch_restaurant_timezone(restaurant_guid=restaurant_guid)
+    elif restaurant_id_value is not None:
+        timezone_value = _fetch_restaurant_timezone(restaurant_id=restaurant_id_value)
+    elif user_id is not None:
+        try:
+            user_id_value = int(user_id)
+        except (TypeError, ValueError):
+            user_id_value = None
+        if user_id_value is not None:
+            restaurant_id_value = _fetch_restaurant_key(user_id_value)
+            if restaurant_id_value is not None:
+                timezone_value = _fetch_restaurant_timezone(restaurant_id=restaurant_id_value)
+
+    token = None
+    if timezone_value:
+        token = set_request_timezone(timezone_value)
+    try:
+        response = await call_next(request)
+    finally:
+        if token is not None:
+            reset_request_timezone(token)
+    return response
 
 @app.on_event("startup")
 def _run_startup_migrations() -> None:

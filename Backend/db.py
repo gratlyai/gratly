@@ -1,6 +1,7 @@
 from fastapi import HTTPException
 import pymysql
 import os
+from contextvars import ContextVar
 from dotenv import load_dotenv
 import configparser
 from typing import Iterable, List, Optional
@@ -329,6 +330,17 @@ try:
 except pymysql.MySQLError as err:
     raise HTTPException(status_code=500, detail=f"Database connection error: {err}")
 
+_request_timezone: ContextVar[Optional[str]] = ContextVar("request_timezone", default=None)
+
+def set_request_timezone(timezone_value: Optional[str]):
+    return _request_timezone.set(timezone_value)
+
+def reset_request_timezone(token) -> None:
+    _request_timezone.reset(token)
+
+def _get_request_timezone() -> Optional[str]:
+    return _request_timezone.get()
+
 def _get_cursor(dictionary: bool = True):
     if not DB_CONFIG:
         raise HTTPException(status_code=500, detail="Database connection not initialized.")
@@ -338,6 +350,12 @@ def _get_cursor(dictionary: bool = True):
             connection_config["cursorclass"] = pymysql.cursors.DictCursor
         connection = pymysql.connect(**connection_config)
         cursor = connection.cursor()
+        timezone_value = _get_request_timezone()
+        if timezone_value:
+            try:
+                cursor.execute("SET time_zone = %s", (timezone_value,))
+            except pymysql.MySQLError:
+                pass
     except pymysql.MySQLError as err:
         raise HTTPException(status_code=500, detail=f"Database connection error: {err}")
 
@@ -351,6 +369,37 @@ def _get_cursor(dictionary: bool = True):
 
     cursor.close = _close
     return cursor
+
+def _fetch_restaurant_timezone(restaurant_id: Optional[int] = None, restaurant_guid: Optional[str] = None) -> Optional[str]:
+    cursor = _get_cursor(dictionary=True)
+    try:
+        if restaurant_guid:
+            cursor.execute(
+                """
+                SELECT TIMEZONE AS timezone
+                FROM GRATLYDB.SRC_RESTAURANTDETAILS
+                WHERE RESTAURANTGUID = %s
+                LIMIT 1
+                """,
+                (restaurant_guid,),
+            )
+        elif restaurant_id is not None:
+            cursor.execute(
+                """
+                SELECT rd.TIMEZONE AS timezone
+                FROM GRATLYDB.SRC_RESTAURANTDETAILS rd
+                JOIN GRATLYDB.SRC_ONBOARDING ob ON rd.RESTAURANTGUID = ob.RESTAURANTGUID
+                WHERE ob.RESTAURANTID = %s
+                LIMIT 1
+                """,
+                (restaurant_id,),
+            )
+        else:
+            return None
+        row = cursor.fetchone()
+        return row.get("timezone") if row else None
+    finally:
+        cursor.close()
 
 def _fetch_restaurant_key(user_id: int) -> Optional[int]:
     cursor = _get_cursor(dictionary=True)
