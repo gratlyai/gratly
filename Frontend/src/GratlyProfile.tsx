@@ -4,7 +4,6 @@ import { fetchUserProfile, updateUserProfile } from "./api/users";
 import {
   API_BASE_URL,
 } from "./api/client";
-import { fetchEmployees } from "./api/employees";
 import {
   fetchEmployeeConnection,
   fetchEmployeePayoutMethods,
@@ -73,7 +72,6 @@ const GratlyProfilePage: React.FC = () => {
   const [showSavedToast, setShowSavedToast] = useState<boolean>(false);
   const [saveError, setSaveError] = useState<string>("");
   const [isSaving, setIsSaving] = useState<boolean>(false);
-  const [employeeGuid, setEmployeeGuid] = useState<string | null>(null);
   const [astraRestaurantConnection, setAstraRestaurantConnection] = useState<AstraConnection | null>(null);
   const [astraEmployeeConnection, setAstraEmployeeConnection] = useState<AstraConnection | null>(null);
   const [astraRestaurantMethods, setAstraRestaurantMethods] = useState<AstraPayoutMethod[]>([]);
@@ -103,30 +101,6 @@ const GratlyProfilePage: React.FC = () => {
     const brand = method.brand ? `${method.brand} ` : "";
     return `${label} (${brand}${last4})`;
   };
-
-  useEffect(() => {
-    if (!userId) {
-      return;
-    }
-    let isMounted = true;
-    fetchEmployees({ restaurantId, userId })
-      .then((employees) => {
-        if (!isMounted) {
-          return;
-        }
-        const match = employees.find((entry) => entry.userId === userId);
-        const nextEmployeeGuid = match?.employeeGuid ?? null;
-        setEmployeeGuid(nextEmployeeGuid);
-      })
-      .catch(() => {
-        if (isMounted) {
-          setEmployeeGuid(null);
-        }
-      });
-    return () => {
-      isMounted = false;
-    };
-  }, [userId, restaurantId]);
 
   useEffect(() => {
     let isMounted = true;

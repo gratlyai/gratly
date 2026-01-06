@@ -15,7 +15,7 @@ import {
   type RestaurantSelectionOption,
 } from "../api/restaurantSelection";
 import { fetchRestaurantDetails } from "../api/superadmin";
-import { fetchEmployeeConnection, fetchEmployeePayoutMethods } from "../api/astra";
+import { fetchEmployeeConnection } from "../api/astra";
 
 type NavItem = {
   label: string;
@@ -211,11 +211,8 @@ const AppLayout: React.FC = () => {
     }
     setAstraPromptLoading(true);
     setAstraPromptMessage(null);
-    Promise.all([
-      fetchEmployeeConnection(numericUserId),
-      fetchEmployeePayoutMethods(numericUserId),
-    ])
-      .then(([connection, payoutMethods]) => {
+    fetchEmployeeConnection(numericUserId)
+      .then((connection) => {
         const isConnected = Boolean(connection?.connected);
         const needsPrompt = !isConnected;
         setShowAstraPrompt(needsPrompt);
