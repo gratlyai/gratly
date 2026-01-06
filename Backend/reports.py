@@ -216,23 +216,21 @@ def get_payroll_report(user_id: int, start_date: str, end_date: str):
     try:
         query = """
             SELECT
-                st.EMPLOYEEGUID AS employee_guid,
+                pf.EMPLOYEEGUID AS employee_guid,
                 CONCAT_WS(' ', se.EMPLOYEEFNAME, se.EMPLOYEELNAME) AS employee_name,
-                COALESCE(SUM(st.AMOUNT_CENTS), 0) AS amount_cents
-            FROM GRATLYDB.STRIPE_SETTLEMENT_TRANSFERS st
+                COALESCE(SUM(pf.NET_PAYOUT), 0) AS amount_total
+            FROM GRATLYDB.PAYOUT_FINAL pf
             LEFT JOIN GRATLYDB.SRC_EMPLOYEES se
-                ON se.EMPLOYEEGUID = st.EMPLOYEEGUID
-            LEFT JOIN GRATLYDB.SRC_ONBOARDING so
-                ON so.RESTAURANTGUID = COALESCE(st.RESTAURANTGUID, se.RESTAURANTGUID)
-            WHERE so.RESTAURANTID = %s
-              AND DATE(st.CREATED_AT) BETWEEN %s AND %s
+                ON se.EMPLOYEEGUID = pf.EMPLOYEEGUID
+            WHERE pf.RESTAURANTID = %s
+              AND STR_TO_DATE(pf.BUSINESSDATE, '%%Y-%%m-%%d') BETWEEN %s AND %s
         """
         params: List[object] = [restaurant_id, start_value, end_value]
         if employee_guid:
-            query += " AND st.EMPLOYEEGUID = %s"
+            query += " AND pf.EMPLOYEEGUID = %s"
             params.append(employee_guid)
         query += """
-            GROUP BY st.EMPLOYEEGUID, employee_name
+            GROUP BY pf.EMPLOYEEGUID, employee_name
             ORDER BY employee_name
         """
         cursor.execute(query, params)
@@ -241,7 +239,7 @@ def get_payroll_report(user_id: int, start_date: str, end_date: str):
             {
                 "employeeGuid": row.get("employee_guid"),
                 "employeeName": (row.get("employee_name") or "").strip() or "Unknown",
-                "totalPayout": round((float(row.get("amount_cents") or 0) / 100), 2),
+                "totalPayout": round(float(row.get("amount_total") or 0), 2),
             }
             for row in rows
         ]
@@ -261,23 +259,21 @@ def _fetch_settlement_totals(
 ):
     query = """
         SELECT
-            st.EMPLOYEEGUID AS employee_guid,
+            pf.EMPLOYEEGUID AS employee_guid,
             CONCAT_WS(' ', se.EMPLOYEEFNAME, se.EMPLOYEELNAME) AS employee_name,
-            COALESCE(SUM(st.AMOUNT_CENTS), 0) AS amount_cents
-        FROM GRATLYDB.STRIPE_SETTLEMENT_TRANSFERS st
+            COALESCE(SUM(pf.NET_PAYOUT), 0) AS amount_total
+        FROM GRATLYDB.PAYOUT_FINAL pf
         LEFT JOIN GRATLYDB.SRC_EMPLOYEES se
-            ON se.EMPLOYEEGUID = st.EMPLOYEEGUID
-        LEFT JOIN GRATLYDB.SRC_ONBOARDING so
-            ON so.RESTAURANTGUID = COALESCE(st.RESTAURANTGUID, se.RESTAURANTGUID)
-        WHERE so.RESTAURANTID = %s
-          AND DATE(st.CREATED_AT) BETWEEN %s AND %s
+            ON se.EMPLOYEEGUID = pf.EMPLOYEEGUID
+        WHERE pf.RESTAURANTID = %s
+          AND STR_TO_DATE(pf.BUSINESSDATE, '%%Y-%%m-%%d') BETWEEN %s AND %s
     """
     params: List[object] = [restaurant_id, start_value, end_value]
     if employee_guid:
-        query += " AND st.EMPLOYEEGUID = %s"
+        query += " AND pf.EMPLOYEEGUID = %s"
         params.append(employee_guid)
     query += """
-        GROUP BY st.EMPLOYEEGUID, employee_name
+        GROUP BY pf.EMPLOYEEGUID, employee_name
         ORDER BY employee_name
     """
     cursor.execute(query, params)
@@ -286,7 +282,7 @@ def _fetch_settlement_totals(
         {
             "employeeGuid": row.get("employee_guid"),
             "employeeName": (row.get("employee_name") or "").strip() or "Unknown",
-            "totalPayout": round((float(row.get("amount_cents") or 0) / 100), 2),
+            "totalPayout": round(float(row.get("amount_total") or 0), 2),
         }
         for row in rows
     ]

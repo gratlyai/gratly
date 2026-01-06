@@ -4,5 +4,6 @@ passlib[bcrypt]
 pydantic
 pymysql
 python-dotenv
-stripe
+cryptography
 uvicorn
+stripe

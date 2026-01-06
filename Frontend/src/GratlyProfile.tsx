@@ -2,12 +2,25 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams } from "react-router-dom";
 import { fetchUserProfile, updateUserProfile } from "./api/users";
 import {
-  createOrFetchStripeConnectedAccount,
-  createStripeOnboardingLink,
-  fetchStripeConnectedAccount,
-  fetchEmployees,
-  type StripeConnectedAccount,
-} from "./api/employees";
+  API_BASE_URL,
+} from "./api/client";
+import { fetchEmployees } from "./api/employees";
+import {
+  fetchEmployeeConnection,
+  fetchEmployeePayoutMethods,
+  fetchRestaurantConnection,
+  fetchRestaurantPayoutMethods,
+  setEmployeePreferredPayoutMethod,
+  setRestaurantPreferredPayoutMethod,
+  startEmployeeCardsConnect,
+  startEmployeeConnect,
+  startRestaurantCardsConnect,
+  startRestaurantConnect,
+  syncEmployeePayoutMethods,
+  syncRestaurantPayoutMethods,
+  type AstraConnection,
+  type AstraPayoutMethod,
+} from "./api/astra";
 import {
   getStoredPermissions,
   permissionConfig,
@@ -15,6 +28,7 @@ import {
   type PermissionState,
 } from "./auth/permissions";
 import { fetchPermissionCatalog } from "./api/permissions";
+import { useLocation } from "react-router-dom";
 
 interface UserProfile {
   firstName: string;
@@ -53,15 +67,29 @@ const GratlyProfilePage: React.FC = () => {
   const [permissions, setPermissions] = useState<PermissionState>(() =>
     getStoredPermissions(localStorage.getItem("userId")),
   );
+  const location = useLocation();
   const [permissionCatalog, setPermissionCatalog] =
     useState<PermissionDescriptor[]>(permissionConfig);
   const [showSavedToast, setShowSavedToast] = useState<boolean>(false);
   const [saveError, setSaveError] = useState<string>("");
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [employeeGuid, setEmployeeGuid] = useState<string | null>(null);
-  const [stripeAccount, setStripeAccount] = useState<StripeConnectedAccount | null>(null);
-  const [isCreatingStripeAccount, setIsCreatingStripeAccount] = useState<boolean>(false);
-  const [stripeError, setStripeError] = useState<string>("");
+  const [astraRestaurantConnection, setAstraRestaurantConnection] = useState<AstraConnection | null>(null);
+  const [astraEmployeeConnection, setAstraEmployeeConnection] = useState<AstraConnection | null>(null);
+  const [astraRestaurantMethods, setAstraRestaurantMethods] = useState<AstraPayoutMethod[]>([]);
+  const [astraEmployeeMethods, setAstraEmployeeMethods] = useState<AstraPayoutMethod[]>([]);
+  const [astraRestaurantError, setAstraRestaurantError] = useState<string>("");
+  const [astraEmployeeError, setAstraEmployeeError] = useState<string>("");
+  const [isConnectingRestaurant, setIsConnectingRestaurant] = useState<boolean>(false);
+  const [isConnectingEmployee, setIsConnectingEmployee] = useState<boolean>(false);
+  const [isSyncingRestaurant, setIsSyncingRestaurant] = useState<boolean>(false);
+  const [isSyncingEmployee, setIsSyncingEmployee] = useState<boolean>(false);
+  const [isAddingRestaurantCard, setIsAddingRestaurantCard] = useState<boolean>(false);
+  const [isAddingEmployeeCard, setIsAddingEmployeeCard] = useState<boolean>(false);
+  const restaurantId = restaurantKey ? Number(restaurantKey) : null;
+  const storedUserId = localStorage.getItem("userId");
+  const userId = storedUserId && Number.isFinite(Number(storedUserId)) ? Number(storedUserId) : null;
+  const isAdminUser = permissions.adminAccess || permissions.superadminAccess;
   const initials =
     [profile.firstName, profile.lastName]
       .map((value) => value.trim())
@@ -69,73 +97,26 @@ const GratlyProfilePage: React.FC = () => {
       .map((value) => value[0]?.toUpperCase())
       .slice(0, 2)
       .join("") || "U";
-  const formatCapabilities = (capabilities?: Record<string, string> | null) => {
-    if (!capabilities) {
-      return "N/A";
-    }
-    const entries = Object.entries(capabilities)
-      .map(([key, value]) => `${key}: ${value}`)
-      .join(", ");
-    return entries.length > 0 ? entries : "N/A";
-  };
-  const formatCardDetails = (card?: StripeConnectedAccount["card"] | null) => {
-    if (!card) {
-      return "N/A";
-    }
-    const brand = card.brand ?? "Card";
-    const last4 = card.last4 ? `**** ${card.last4}` : "****";
-    const expMonth = card.expMonth ? String(card.expMonth).padStart(2, "0") : "--";
-    const expYear = card.expYear ? String(card.expYear) : "--";
-    const funding = card.funding ? `, ${card.funding}` : "";
-    const country = card.country ? `, ${card.country}` : "";
-    return `${brand} ${last4} exp ${expMonth}/${expYear}${funding}${country}`;
+  const formatAstraMethod = (method: AstraPayoutMethod) => {
+    const last4 = method.last4 ? `**** ${method.last4}` : "****";
+    const label = method.label || (method.methodType === "debit_card" ? "Debit card" : "Bank account");
+    const brand = method.brand ? `${method.brand} ` : "";
+    return `${label} (${brand}${last4})`;
   };
 
   useEffect(() => {
-    const storedUserId = localStorage.getItem("userId");
-    if (!storedUserId) {
-      return;
-    }
-    const numericUserId = Number(storedUserId);
-    if (!Number.isFinite(numericUserId)) {
+    if (!userId) {
       return;
     }
     let isMounted = true;
-    fetchEmployees()
+    fetchEmployees({ restaurantId, userId })
       .then((employees) => {
         if (!isMounted) {
           return;
         }
-        const match = employees.find((entry) => entry.userId === numericUserId);
+        const match = employees.find((entry) => entry.userId === userId);
         const nextEmployeeGuid = match?.employeeGuid ?? null;
         setEmployeeGuid(nextEmployeeGuid);
-        if (!nextEmployeeGuid) {
-          return;
-        }
-        fetchStripeConnectedAccount(nextEmployeeGuid)
-          .then((summary) => {
-            if (!isMounted || !summary?.accountId) {
-              return;
-            }
-            setStripeAccount({
-              accountId: summary.accountId,
-              created: false,
-              chargesEnabled: summary.chargesEnabled ?? false,
-              payoutsEnabled: summary.payoutsEnabled ?? false,
-              detailsSubmitted: summary.detailsSubmitted ?? false,
-              disabledReason: summary.disabledReason ?? null,
-              accountDeauthorized: summary.accountDeauthorized ?? false,
-              businessType: summary.businessType ?? null,
-              capabilities: summary.capabilities ?? null,
-              defaultCurrency: summary.defaultCurrency ?? null,
-              card: summary.card ?? null,
-            });
-          })
-          .catch(() => {
-            if (isMounted) {
-              setStripeAccount(null);
-            }
-          });
       })
       .catch(() => {
         if (isMounted) {
@@ -145,21 +126,15 @@ const GratlyProfilePage: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [userId, restaurantId]);
 
   useEffect(() => {
     let isMounted = true;
-    const storedUserId = localStorage.getItem("userId");
-    if (!storedUserId) {
+    if (!userId) {
       setIsLoadingProfile(false);
       return;
     }
-    const numericUserId = Number(storedUserId);
-    if (!Number.isFinite(numericUserId)) {
-      setIsLoadingProfile(false);
-      return;
-    }
-    fetchUserProfile(numericUserId)
+    fetchUserProfile(userId)
       .then((data) => {
         if (!isMounted || !data) {
           return;
@@ -182,11 +157,48 @@ const GratlyProfilePage: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [userId]);
+
+  useEffect(() => {
+    if (!location.hash) {
+      return;
+    }
+    const targetId = location.hash.replace("#", "");
+    if (!targetId) {
+      return;
+    }
+    const attemptScroll = () => {
+      const target = document.getElementById(targetId);
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    };
+    const timeoutId = window.setTimeout(attemptScroll, 150);
+    return () => window.clearTimeout(timeoutId);
+  }, [location.hash]);
 
   useEffect(() => {
     const storedUserId = localStorage.getItem("userId");
     setPermissions(getStoredPermissions(storedUserId));
+  }, []);
+
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const code = query.get("code");
+    const state = query.get("state");
+    if (!code || !state) {
+      return;
+    }
+    const context = localStorage.getItem("astraReturnContext");
+    if (!context) {
+      return;
+    }
+    localStorage.setItem("astraPendingSync", context);
+    localStorage.removeItem("astraReturnContext");
+    const callbackPath =
+      context === "restaurant" ? "/astra/oauth/callback/business" : "/astra/oauth/callback/employee";
+    const callbackUrl = `${API_BASE_URL}${callbackPath}?${new URLSearchParams({ code, state }).toString()}`;
+    window.location.href = callbackUrl;
   }, []);
 
   useEffect(() => {
@@ -204,6 +216,125 @@ const GratlyProfilePage: React.FC = () => {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!restaurantId || !isAdminUser) {
+      return;
+    }
+    let isMounted = true;
+    fetchRestaurantConnection(restaurantId)
+      .then((data) => {
+        if (isMounted) {
+          setAstraRestaurantConnection(data);
+        }
+      })
+      .catch((error) => {
+        if (isMounted) {
+          setAstraRestaurantError(error instanceof Error ? error.message : "Failed to load Astra connection.");
+        }
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [restaurantId, isAdminUser]);
+
+  useEffect(() => {
+    if (!userId) {
+      return;
+    }
+    let isMounted = true;
+    fetchEmployeeConnection(userId)
+      .then((data) => {
+        if (isMounted) {
+          setAstraEmployeeConnection(data);
+        }
+      })
+      .catch((error) => {
+        if (isMounted) {
+          setAstraEmployeeError(error instanceof Error ? error.message : "Failed to load Astra connection.");
+        }
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [userId]);
+
+  useEffect(() => {
+    if (!astraRestaurantConnection?.connected || !restaurantId) {
+      return;
+    }
+    fetchRestaurantPayoutMethods(restaurantId)
+      .then((data) => setAstraRestaurantMethods(data.methods ?? []))
+      .catch(() => {
+        setAstraRestaurantMethods([]);
+      });
+  }, [astraRestaurantConnection, restaurantId]);
+
+  useEffect(() => {
+    if (!astraEmployeeConnection?.connected || !userId) {
+      return;
+    }
+    fetchEmployeePayoutMethods(userId)
+      .then((data) => setAstraEmployeeMethods(data.methods ?? []))
+      .catch(() => {
+        setAstraEmployeeMethods([]);
+      });
+  }, [astraEmployeeConnection, userId]);
+
+  useEffect(() => {
+    if (!userId) {
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("connected") !== "1") {
+      return;
+    }
+    const context = localStorage.getItem("astraPendingSync") || localStorage.getItem("astraReturnContext");
+    if (!context) {
+      return;
+    }
+    const finalize = () => {
+      localStorage.removeItem("astraPendingSync");
+      localStorage.removeItem("astraReturnContext");
+    };
+    if (context === "restaurant") {
+      if (!restaurantId || !isAdminUser) {
+        finalize();
+        return;
+      }
+      setIsSyncingRestaurant(true);
+      syncRestaurantPayoutMethods(restaurantId)
+        .then((response) => {
+          setAstraRestaurantMethods(response.methods ?? []);
+          if (response.cardError) {
+            setAstraRestaurantError(response.cardError);
+          }
+        })
+        .catch((error) => {
+          setAstraRestaurantError(error instanceof Error ? error.message : "Unable to sync payout methods.");
+        })
+        .finally(() => {
+          setIsSyncingRestaurant(false);
+          finalize();
+        });
+      return;
+    }
+    setIsSyncingEmployee(true);
+    syncEmployeePayoutMethods(userId)
+      .then((response) => {
+        setAstraEmployeeMethods(response.methods ?? []);
+        if (response.cardError) {
+          setAstraEmployeeError(response.cardError);
+        }
+      })
+      .catch((error) => {
+        setAstraEmployeeError(error instanceof Error ? error.message : "Unable to sync payout methods.");
+      })
+      .finally(() => {
+        setIsSyncingEmployee(false);
+        finalize();
+      });
+  }, [isAdminUser, restaurantId, userId]);
 
   const handleEdit = () => {
     setIsEditing(true);
@@ -261,28 +392,148 @@ const GratlyProfilePage: React.FC = () => {
     }
   };
 
-  const handleStripeAccountCreate = async () => {
-    if (!employeeGuid) {
-      setStripeError("Employee GUID is required to create a Stripe account.");
+  const handleRestaurantConnect = async () => {
+    if (!restaurantId) {
       return;
     }
-    setStripeError("");
-    setIsCreatingStripeAccount(true);
-    const response = await createOrFetchStripeConnectedAccount(employeeGuid);
-    if (!response) {
-      setStripeError("Unable to create Stripe connected account.");
-      setIsCreatingStripeAccount(false);
+    if (!userId) {
+      setAstraRestaurantError("Missing user ID. Please log in again.");
       return;
     }
-    setStripeAccount(response);
+    setIsConnectingRestaurant(true);
+    setAstraRestaurantError("");
+    try {
+      const response = await startRestaurantConnect(restaurantId, userId);
+      localStorage.setItem("astraReturnContext", "restaurant");
+      window.location.href = response.redirectUrl;
+    } catch (error) {
+      setAstraRestaurantError(error instanceof Error ? error.message : "Unable to start Astra connect.");
+    } finally {
+      setIsConnectingRestaurant(false);
+    }
+  };
 
-    const onboardingLink = await createStripeOnboardingLink(employeeGuid);
-    if (!onboardingLink?.url) {
-      setStripeError("Unable to start Stripe onboarding.");
-      setIsCreatingStripeAccount(false);
+  const handleEmployeeConnect = async () => {
+    if (!userId) {
+      setAstraEmployeeError("Missing user ID. Please log in again.");
       return;
     }
-    window.location.assign(onboardingLink.url);
+    setIsConnectingEmployee(true);
+    setAstraEmployeeError("");
+    try {
+      const response = await startEmployeeConnect(userId);
+      localStorage.setItem("astraReturnContext", "employee");
+      window.location.href = response.redirectUrl;
+    } catch (error) {
+      setAstraEmployeeError(error instanceof Error ? error.message : "Unable to start Astra connect.");
+    } finally {
+      setIsConnectingEmployee(false);
+    }
+  };
+
+  const handleRestaurantCardConnect = async () => {
+    if (!restaurantId) {
+      return;
+    }
+    if (!userId) {
+      setAstraRestaurantError("Missing user ID. Please log in again.");
+      return;
+    }
+    setIsAddingRestaurantCard(true);
+    setAstraRestaurantError("");
+    try {
+      const response = await startRestaurantCardsConnect(restaurantId, userId);
+      localStorage.setItem("astraReturnContext", "restaurant");
+      window.location.href = response.redirectUrl;
+    } catch (error) {
+      setAstraRestaurantError(error instanceof Error ? error.message : "Unable to start card connect.");
+    } finally {
+      setIsAddingRestaurantCard(false);
+    }
+  };
+
+  const handleEmployeeCardConnect = async () => {
+    if (!userId) {
+      setAstraEmployeeError("Missing user ID. Please log in again.");
+      return;
+    }
+    setIsAddingEmployeeCard(true);
+    setAstraEmployeeError("");
+    try {
+      const response = await startEmployeeCardsConnect(userId);
+      localStorage.setItem("astraReturnContext", "employee");
+      window.location.href = response.redirectUrl;
+    } catch (error) {
+      setAstraEmployeeError(error instanceof Error ? error.message : "Unable to start card connect.");
+    } finally {
+      setIsAddingEmployeeCard(false);
+    }
+  };
+
+  const handleRestaurantSync = async () => {
+    if (!restaurantId) {
+      return;
+    }
+    setIsSyncingRestaurant(true);
+    setAstraRestaurantError("");
+    try {
+      const response = await syncRestaurantPayoutMethods(restaurantId);
+      setAstraRestaurantMethods(response.methods ?? []);
+      if (response.cardError) {
+        setAstraRestaurantError(response.cardError);
+      }
+    } catch (error) {
+      setAstraRestaurantError(error instanceof Error ? error.message : "Unable to sync payout methods.");
+    } finally {
+      setIsSyncingRestaurant(false);
+    }
+  };
+
+  const handleEmployeeSync = async () => {
+    if (!userId) {
+      return;
+    }
+    setIsSyncingEmployee(true);
+    setAstraEmployeeError("");
+    try {
+      const response = await syncEmployeePayoutMethods(userId);
+      setAstraEmployeeMethods(response.methods ?? []);
+      if (response.cardError) {
+        setAstraEmployeeError(response.cardError);
+      }
+    } catch (error) {
+      setAstraEmployeeError(error instanceof Error ? error.message : "Unable to sync payout methods.");
+    } finally {
+      setIsSyncingEmployee(false);
+    }
+  };
+
+  const handleRestaurantPreferred = async (methodId: string) => {
+    if (!restaurantId) {
+      return;
+    }
+    try {
+      await setRestaurantPreferredPayoutMethod(restaurantId, methodId);
+      setAstraRestaurantMethods((methods) =>
+        methods.map((method) => ({ ...method, isPreferred: method.id === methodId })),
+      );
+    } catch (error) {
+      setAstraRestaurantError(error instanceof Error ? error.message : "Unable to update preferred method.");
+    }
+  };
+
+  const handleEmployeePreferred = async (methodId: string) => {
+    if (!userId) {
+      return;
+    }
+    try {
+      await setEmployeePreferredPayoutMethod(userId, methodId);
+      setAstraEmployeeMethods((methods) =>
+        methods.map((method) => ({ ...method, isPreferred: method.id === methodId })),
+      );
+    } catch (error) {
+      setAstraEmployeeError(error instanceof Error ? error.message : "Unable to update preferred method.");
+    }
   };
 
   useEffect(() => {
@@ -502,51 +753,202 @@ const GratlyProfilePage: React.FC = () => {
           </div>
         )}
 
-        {!isLoadingProfile ? (
+        {!isLoadingProfile && isAdminUser && restaurantId ? (
           <div className="bg-white rounded-xl shadow-md border border-gray-200 p-6 mt-6">
-            <h3 className="text-lg font-bold text-gray-900 mb-4">Stripe Account Details</h3>
+            <h3 className="text-lg font-bold text-gray-900 mb-4">Astra Business Payouts</h3>
             <div className="space-y-3">
               <div className="flex items-center justify-between rounded-lg bg-gray-50 px-4 py-3 text-sm">
-                <span className="font-medium text-gray-900">Connected account</span>
+                <span className="font-medium text-gray-900">Connection status</span>
                 <span
                   className={`text-xs font-semibold ${
-                    stripeAccount ? "text-emerald-600" : "text-gray-500"
+                    astraRestaurantConnection?.connected ? "text-emerald-600" : "text-gray-500"
                   }`}
                 >
-                  {stripeAccount ? "Connected" : "Not created"}
+                  {astraRestaurantConnection?.connected ? "Connected" : "Not connected"}
                 </span>
               </div>
-              {stripeAccount ? (
-                <div className="rounded-lg bg-gray-50 px-4 py-3 text-xs text-gray-600">
-                  <p>Charges enabled: {stripeAccount.chargesEnabled ? "Yes" : "No"}</p>
-                  <p>Payouts enabled: {stripeAccount.payoutsEnabled ? "Yes" : "No"}</p>
-                  <p>Details submitted: {stripeAccount.detailsSubmitted ? "Yes" : "No"}</p>
-                  <p>Business type: {stripeAccount.businessType ?? "N/A"}</p>
-                  <p>Default currency: {stripeAccount.defaultCurrency ?? "N/A"}</p>
-                  <p>Capabilities: {formatCapabilities(stripeAccount.capabilities)}</p>
-                  <p>Card: {formatCardDetails(stripeAccount.card)}</p>
-                  {stripeAccount.accountDeauthorized ? (
-                    <p>Account deauthorized: Yes</p>
+              {astraRestaurantConnection?.connected ? (
+                <div className="rounded-lg bg-gray-50 px-4 py-3 text-xs text-gray-600 space-y-1">
+                  <p>Onboarding status: {astraRestaurantConnection.onboardingStatus ?? "pending_review"}</p>
+                  <p>KYC/KYB status: {astraRestaurantConnection.kyxType ?? "N/A"}</p>
+                  {astraRestaurantConnection.lastStatusReason ? (
+                    <p>Status reason: {astraRestaurantConnection.lastStatusReason}</p>
                   ) : null}
-                  {stripeAccount.disabledReason ? (
-                    <p>Disabled reason: {stripeAccount.disabledReason}</p>
+                  {astraRestaurantConnection.astraUserId ? (
+                    <p className="break-all">Astra user ID: {astraRestaurantConnection.astraUserId}</p>
                   ) : null}
-                  <p className="break-all">Account ID: {stripeAccount.accountId}</p>
                 </div>
               ) : null}
               <div className="flex items-center justify-between rounded-lg bg-gray-50 px-4 py-3 text-sm">
-                <span className="font-medium text-gray-900">Start onboarding to receive payouts</span>
+                <span className="font-medium text-gray-900">Connect Astra to receive payouts</span>
                 <button
                   type="button"
-                  onClick={handleStripeAccountCreate}
-                  disabled={isCreatingStripeAccount || !employeeGuid}
+                  onClick={handleRestaurantConnect}
+                  disabled={isConnectingRestaurant}
                   className="text-xs font-semibold text-gray-900 hover:text-gray-700 disabled:cursor-not-allowed disabled:text-gray-400"
                 >
-                  {isCreatingStripeAccount ? "Starting..." : "Start"}
+                  {isConnectingRestaurant ? "Starting..." : "Connect to Astra"}
                 </button>
               </div>
-              {stripeError ? (
-                <p className="text-xs font-semibold text-red-600">{stripeError}</p>
+              {astraRestaurantConnection?.connected ? (
+                <div className="rounded-lg bg-gray-50 px-4 py-3 text-sm space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium text-gray-900">Payout methods</span>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleRestaurantSync}
+                        disabled={isSyncingRestaurant}
+                        className="text-xs font-semibold text-gray-900 hover:text-gray-700 disabled:cursor-not-allowed disabled:text-gray-400"
+                      >
+                        {isSyncingRestaurant ? "Syncing..." : "Sync"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleRestaurantCardConnect}
+                        disabled={isAddingRestaurantCard}
+                        className="text-xs font-semibold text-gray-900 hover:text-gray-700 disabled:cursor-not-allowed disabled:text-gray-400"
+                      >
+                        {isAddingRestaurantCard ? "Opening..." : "Add debit card"}
+                      </button>
+                    </div>
+                  </div>
+                  {astraRestaurantMethods.length ? (
+                    <div className="space-y-2">
+                      {astraRestaurantMethods.map((method) => (
+                        <div
+                          key={method.id}
+                          className="flex items-center justify-between rounded-lg bg-white px-3 py-2 text-xs"
+                        >
+                          <div>
+                            <p className="font-semibold text-gray-900">{formatAstraMethod(method)}</p>
+                            <p className="text-gray-500">Status: {method.status ?? "active"}</p>
+                          </div>
+                          {method.isPreferred ? (
+                            <span className="rounded-full bg-emerald-100 px-2 py-1 text-[10px] font-semibold text-emerald-700">
+                              Preferred
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleRestaurantPreferred(method.id)}
+                              className="text-[10px] font-semibold text-gray-900 hover:text-gray-700"
+                            >
+                              Set preferred
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-gray-500">No payout methods found yet.</p>
+                  )}
+                </div>
+              ) : null}
+              {astraRestaurantError ? (
+                <p className="text-xs font-semibold text-red-600">{astraRestaurantError}</p>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
+        {!isLoadingProfile && userId && !isAdminUser ? (
+          <div
+            id="astra-employee-payouts"
+            className="bg-white rounded-xl shadow-md border border-gray-200 p-6 mt-6"
+          >
+            <h3 className="text-lg font-bold text-gray-900 mb-4">Astra Employee Payouts</h3>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between rounded-lg bg-gray-50 px-4 py-3 text-sm">
+                <span className="font-medium text-gray-900">Connection status</span>
+                <span
+                  className={`text-xs font-semibold ${
+                    astraEmployeeConnection?.connected ? "text-emerald-600" : "text-gray-500"
+                  }`}
+                >
+                  {astraEmployeeConnection?.connected ? "Connected" : "Not connected"}
+                </span>
+              </div>
+              {astraEmployeeConnection?.connected ? (
+                <div className="rounded-lg bg-gray-50 px-4 py-3 text-xs text-gray-600 space-y-1">
+                  <p>Onboarding status: {astraEmployeeConnection.onboardingStatus ?? "pending_review"}</p>
+                  <p>KYC status: {astraEmployeeConnection.kyxType ?? "N/A"}</p>
+                  {astraEmployeeConnection.lastStatusReason ? (
+                    <p>Status reason: {astraEmployeeConnection.lastStatusReason}</p>
+                  ) : null}
+                  {astraEmployeeConnection.astraUserId ? (
+                    <p className="break-all">Astra user ID: {astraEmployeeConnection.astraUserId}</p>
+                  ) : null}
+                </div>
+              ) : null}
+              <div className="flex items-center justify-between rounded-lg bg-gray-50 px-4 py-3 text-sm">
+                <span className="font-medium text-gray-900">Connect Astra to receive payouts</span>
+                <button
+                  type="button"
+                  onClick={handleEmployeeConnect}
+                  disabled={isConnectingEmployee}
+                  className="text-xs font-semibold text-gray-900 hover:text-gray-700 disabled:cursor-not-allowed disabled:text-gray-400"
+                >
+                  {isConnectingEmployee ? "Starting..." : "Connect to Astra"}
+                </button>
+              </div>
+              {astraEmployeeConnection?.connected ? (
+                <div className="rounded-lg bg-gray-50 px-4 py-3 text-sm space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium text-gray-900">Payout methods</span>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleEmployeeSync}
+                        disabled={isSyncingEmployee}
+                        className="text-xs font-semibold text-gray-900 hover:text-gray-700 disabled:cursor-not-allowed disabled:text-gray-400"
+                      >
+                        {isSyncingEmployee ? "Syncing..." : "Sync"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleEmployeeCardConnect}
+                        disabled={isAddingEmployeeCard}
+                        className="text-xs font-semibold text-gray-900 hover:text-gray-700 disabled:cursor-not-allowed disabled:text-gray-400"
+                      >
+                        {isAddingEmployeeCard ? "Opening..." : "Add debit card"}
+                      </button>
+                    </div>
+                  </div>
+                  {astraEmployeeMethods.length ? (
+                    <div className="space-y-2">
+                      {astraEmployeeMethods.map((method) => (
+                        <div
+                          key={method.id}
+                          className="flex items-center justify-between rounded-lg bg-white px-3 py-2 text-xs"
+                        >
+                          <div>
+                            <p className="font-semibold text-gray-900">{formatAstraMethod(method)}</p>
+                            <p className="text-gray-500">Status: {method.status ?? "active"}</p>
+                          </div>
+                          {method.isPreferred ? (
+                            <span className="rounded-full bg-emerald-100 px-2 py-1 text-[10px] font-semibold text-emerald-700">
+                              Preferred
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleEmployeePreferred(method.id)}
+                              className="text-[10px] font-semibold text-gray-900 hover:text-gray-700"
+                            >
+                              Set preferred
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-gray-500">No payout methods found yet.</p>
+                  )}
+                </div>
+              ) : null}
+              {astraEmployeeError ? (
+                <p className="text-xs font-semibold text-red-600">{astraEmployeeError}</p>
               ) : null}
             </div>
           </div>

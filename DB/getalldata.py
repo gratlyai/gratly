@@ -110,21 +110,28 @@ def _normalize_days_back(value: Optional[int]) -> Optional[int]:
    return parsed if parsed > 0 else 1
 
 
+def _format_utc_timestamp(dt: datetime) -> str:
+   if dt.tzinfo is None:
+       dt = dt.replace(tzinfo=timezone.utc)
+   dt_utc = dt.astimezone(timezone.utc)
+   return dt_utc.strftime('%Y-%m-%dT%H:%M:%S.000-0000')
+
+
 def _resolve_date_range(days_back: Optional[int]):
-   today = date.today()
+   pacific_today = datetime.now(ZoneInfo("America/Los_Angeles")).date()
    if days_back is None:
-       start_day = today
-       end_day = today
+       start_day = pacific_today
+       end_day = pacific_today
        total_days = 1
    else:
-       end_day = today - timedelta(days=1)
+       end_day = pacific_today - timedelta(days=1)
        start_day = end_day - timedelta(days=days_back - 1)
        total_days = days_back
 
    start_date_time = datetime.combine(start_day, time(0, 0, 1))  # 00:00:01
    end_datetime = datetime.combine(end_day, time(23, 59, 59))
-   start_date = convert_pacific_utc(start_date_time.strftime('%Y-%m-%d %H:%M:%S'))
-   end_date = convert_pacific_utc(end_datetime.strftime('%Y-%m-%d %H:%M:%S'))
+   start_date = _format_utc_timestamp(start_date_time)
+   end_date = _format_utc_timestamp(end_datetime)
    business_dates = [
        (start_day + timedelta(days=offset)).strftime('%Y%m%d') for offset in range(total_days)
    ]
@@ -169,7 +176,7 @@ def main(days_back: Optional[int] = None):
    if not get_results:
        log("No rows found in GRATLYDB.SRC_ONBOARDING. Exiting.")
        return
-  
+
    for row in get_results:
        payload = {
        "clientId": row['SECRETKEY'],
@@ -186,7 +193,6 @@ def main(days_back: Optional[int] = None):
       
        data = response.json()
 
-
        pretty_json_output = json.dumps(data, indent=4)
        access_token = json.loads(pretty_json_output)
        if 'token' not in access_token or 'accessToken' not in access_token['token']:
@@ -199,7 +205,6 @@ def main(days_back: Optional[int] = None):
        "Authorization": accesstoken
        }
               
-
 
        for url in all_url:
            # print(f"URL IS {url}")
@@ -218,7 +223,31 @@ def main(days_back: Optional[int] = None):
                    # json_file.write(pretty_json_output)
                   
                # SQL query to insert data
-               restaurant_sql_query = "INSERT INTO GRATLYDB.SRC_RESTAURANTDETAILS (RESTAURANTGUID,RESTAURANTNAME,LOCATIONNAME,LOCATIONCODE,DESCRIPTION,TIMEZONE,CURRENCYCODE,FIRSTBUSINESSDATE,ARCHIVED,ADDRESS1,ADDRESS2,CITY,STATECODE,ZIPCODE,COUNTRY,PHONE,WEBSITE,ORDERONLINE) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+               restaurant_sql_query = (
+                   "INSERT INTO GRATLYDB.SRC_RESTAURANTDETAILS "
+                   "(RESTAURANTGUID,RESTAURANTNAME,LOCATIONNAME,LOCATIONCODE,DESCRIPTION,TIMEZONE,"
+                   "CURRENCYCODE,FIRSTBUSINESSDATE,ARCHIVED,ADDRESS1,ADDRESS2,CITY,STATECODE,ZIPCODE,"
+                   "COUNTRY,PHONE,WEBSITE,ORDERONLINE) "
+                   "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                   "ON DUPLICATE KEY UPDATE "
+                   "RESTAURANTNAME=VALUES(RESTAURANTNAME),"
+                   "LOCATIONNAME=VALUES(LOCATIONNAME),"
+                   "LOCATIONCODE=VALUES(LOCATIONCODE),"
+                   "DESCRIPTION=VALUES(DESCRIPTION),"
+                   "TIMEZONE=VALUES(TIMEZONE),"
+                   "CURRENCYCODE=VALUES(CURRENCYCODE),"
+                   "FIRSTBUSINESSDATE=VALUES(FIRSTBUSINESSDATE),"
+                   "ARCHIVED=VALUES(ARCHIVED),"
+                   "ADDRESS1=VALUES(ADDRESS1),"
+                   "ADDRESS2=VALUES(ADDRESS2),"
+                   "CITY=VALUES(CITY),"
+                   "STATECODE=VALUES(STATECODE),"
+                   "ZIPCODE=VALUES(ZIPCODE),"
+                   "COUNTRY=VALUES(COUNTRY),"
+                   "PHONE=VALUES(PHONE),"
+                   "WEBSITE=VALUES(WEBSITE),"
+                   "ORDERONLINE=VALUES(ORDERONLINE)"
+               )
                restaurant_sql_data = [(headers_init,data['general']['name'],data['general']['locationName'],data['general']['locationCode'],data['general']['description'],data['general']['timeZone'],data['general']['currencyCode'],data['general']['firstBusinessDate'],data['general']['archived'],data['location']['address1'],data['location']['address2'],
                                        data['location']['city'],data['location']['stateCode'],data['location']['zipCode'],data['location']['country'],data['location']['phone'],data['urls']['website'],data['urls']['orderOnline'])]
 
@@ -242,7 +271,22 @@ def main(days_back: Optional[int] = None):
                    continue
               
                # SQL query to insert data
-               jobs_sql_query = "INSERT INTO GRATLYDB.SRC_JOBS(RESTAURANTGUID,JOBGUID,JOBTITLE,ENTITYTYPE,CREATEDDATE,DELETED,DELETEDDATE,CODE,TIPPED,DEFAULTWAGE,WAGEFREQUENCY) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+               jobs_sql_query = (
+                   "INSERT INTO GRATLYDB.SRC_JOBS("
+                   "RESTAURANTGUID,JOBGUID,JOBTITLE,ENTITYTYPE,CREATEDDATE,DELETED,DELETEDDATE,"
+                   "CODE,TIPPED,DEFAULTWAGE,WAGEFREQUENCY"
+                   ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                   "ON DUPLICATE KEY UPDATE "
+                   "JOBTITLE=VALUES(JOBTITLE),"
+                   "ENTITYTYPE=VALUES(ENTITYTYPE),"
+                   "CREATEDDATE=VALUES(CREATEDDATE),"
+                   "DELETED=VALUES(DELETED),"
+                   "DELETEDDATE=VALUES(DELETEDDATE),"
+                   "CODE=VALUES(CODE),"
+                   "TIPPED=VALUES(TIPPED),"
+                   "DEFAULTWAGE=VALUES(DEFAULTWAGE),"
+                   "WAGEFREQUENCY=VALUES(WAGEFREQUENCY)"
+               )
                jobs_sql_data = [(headers_init,record['guid'],record['title'],record['entityType'],record['createdDate'][0:10],record['deleted'],record['deletedDate'][0:10],record['code'],record['tipped'],record['defaultWage'],record['wageFrequency']) for record in data]
 
 
@@ -265,7 +309,20 @@ def main(days_back: Optional[int] = None):
                    continue
               
                # SQL query to insert data
-               employees_sql_query = "INSERT INTO GRATLYDB.SRC_EMPLOYEES (RESTAURANTGUID,EMPLOYEEGUID,EMPLOYEEFNAME,EMPLOYEELNAME,CHOSENNAME,PHONENUMBER,EMAIL,DELETED,DELETEDDATE) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+               employees_sql_query = (
+                   "INSERT INTO GRATLYDB.SRC_EMPLOYEES "
+                   "(RESTAURANTGUID,EMPLOYEEGUID,EMPLOYEEFNAME,EMPLOYEELNAME,CHOSENNAME,PHONENUMBER,"
+                   "EMAIL,DELETED,DELETEDDATE) "
+                   "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                   "ON DUPLICATE KEY UPDATE "
+                   "EMPLOYEEFNAME=VALUES(EMPLOYEEFNAME),"
+                   "EMPLOYEELNAME=VALUES(EMPLOYEELNAME),"
+                   "CHOSENNAME=VALUES(CHOSENNAME),"
+                   "PHONENUMBER=VALUES(PHONENUMBER),"
+                   "EMAIL=VALUES(EMAIL),"
+                   "DELETED=VALUES(DELETED),"
+                   "DELETEDDATE=VALUES(DELETEDDATE)"
+               )
                employees_sql_data = [(headers_init,record['guid'],record['firstName'],record['lastName'],record['chosenName'],record['phoneNumber'],record['email'],record['deleted'],record['deletedDate'][0:10]) for record in data]
 
 
@@ -281,7 +338,13 @@ def main(days_back: Optional[int] = None):
                employeejobs_to_insert = []
               
                # SQL query to insert data
-               employee_job_sql_query = "INSERT INTO GRATLYDB.SRC_EMPLOYEEROLE(RESTAURANTGUID,EMPLOYEEGUID,NAME,JOBGUID) VALUES (%s, %s, %s, %s)"
+               employee_job_sql_query = (
+                   "INSERT INTO GRATLYDB.SRC_EMPLOYEEROLE"
+                   "(RESTAURANTGUID,EMPLOYEEGUID,NAME,JOBGUID) "
+                   "VALUES (%s, %s, %s, %s) "
+                   "ON DUPLICATE KEY UPDATE "
+                   "NAME=VALUES(NAME)"
+               )
               
                for record in data:
                    restaurantID = headers_init
@@ -322,9 +385,40 @@ def main(days_back: Optional[int] = None):
                timeentries_sql_data = []
               
                # SQL query to insert data
-               timeentries_sql_query = """INSERT INTO GRATLYDB.SRC_TIMEENTRIES(RESTAURANTGUID,TIMEENTRYGUID,ENTITYTYPE,EXTERNALID,EMPLOYEEGUID,JOBID,SHIFTREFERENCE,INDATE,OUTDATE,
-                                       BUSINESSDATE,REGULARHOURS,OVERTIMEHOURS,HOURLYWAGE,TIPSWITHHELD,NONCASHSALES,CASHSALES,NONCASHGRATUITYSERVICECHARGES,CASHGRATUITYSERVICECHARGES,
-                                       NONCASHTIPS,DECLAREDCASHTIPS,AUTOCLOCKEDOUT,DELETED,CREATEDDATE,MODIFIEDDATE,DELETEDDATE) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+               timeentries_sql_query = (
+                   "INSERT INTO GRATLYDB.SRC_TIMEENTRIES("
+                   "RESTAURANTGUID,TIMEENTRYGUID,ENTITYTYPE,EXTERNALID,EMPLOYEEGUID,JOBID,"
+                   "SHIFTREFERENCE,INDATE,OUTDATE,BUSINESSDATE,REGULARHOURS,OVERTIMEHOURS,"
+                   "HOURLYWAGE,TIPSWITHHELD,NONCASHSALES,CASHSALES,NONCASHGRATUITYSERVICECHARGES,"
+                   "CASHGRATUITYSERVICECHARGES,NONCASHTIPS,DECLAREDCASHTIPS,AUTOCLOCKEDOUT,DELETED,"
+                   "CREATEDDATE,MODIFIEDDATE,DELETEDDATE"
+                   ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+                   "%s, %s, %s, %s, %s, %s, %s, %s) "
+                   "ON DUPLICATE KEY UPDATE "
+                   "ENTITYTYPE=VALUES(ENTITYTYPE),"
+                   "EXTERNALID=VALUES(EXTERNALID),"
+                   "EMPLOYEEGUID=VALUES(EMPLOYEEGUID),"
+                   "JOBID=VALUES(JOBID),"
+                   "SHIFTREFERENCE=VALUES(SHIFTREFERENCE),"
+                   "INDATE=VALUES(INDATE),"
+                   "OUTDATE=VALUES(OUTDATE),"
+                   "BUSINESSDATE=VALUES(BUSINESSDATE),"
+                   "REGULARHOURS=VALUES(REGULARHOURS),"
+                   "OVERTIMEHOURS=VALUES(OVERTIMEHOURS),"
+                   "HOURLYWAGE=VALUES(HOURLYWAGE),"
+                   "TIPSWITHHELD=VALUES(TIPSWITHHELD),"
+                   "NONCASHSALES=VALUES(NONCASHSALES),"
+                   "CASHSALES=VALUES(CASHSALES),"
+                   "NONCASHGRATUITYSERVICECHARGES=VALUES(NONCASHGRATUITYSERVICECHARGES),"
+                   "CASHGRATUITYSERVICECHARGES=VALUES(CASHGRATUITYSERVICECHARGES),"
+                   "NONCASHTIPS=VALUES(NONCASHTIPS),"
+                   "DECLAREDCASHTIPS=VALUES(DECLAREDCASHTIPS),"
+                   "AUTOCLOCKEDOUT=VALUES(AUTOCLOCKEDOUT),"
+                   "DELETED=VALUES(DELETED),"
+                   "CREATEDDATE=VALUES(CREATEDDATE),"
+                   "MODIFIEDDATE=VALUES(MODIFIEDDATE),"
+                   "DELETEDDATE=VALUES(DELETEDDATE)"
+               )
               
 
 
@@ -353,7 +447,13 @@ def main(days_back: Optional[int] = None):
                    continue
               
                # SQL query to insert data
-               tables_sql_query = "INSERT INTO GRATLYDB.SRC_TABLES(RESTAURANTGUID,TABLEGUID,ENTITYTYPE,TABLENAME) VALUES (%s, %s, %s, %s)"
+               tables_sql_query = (
+                   "INSERT INTO GRATLYDB.SRC_TABLES(RESTAURANTGUID,TABLEGUID,ENTITYTYPE,TABLENAME) "
+                   "VALUES (%s, %s, %s, %s) "
+                   "ON DUPLICATE KEY UPDATE "
+                   "ENTITYTYPE=VALUES(ENTITYTYPE),"
+                   "TABLENAME=VALUES(TABLENAME)"
+               )
               
                tables_sql_data = [(headers_init,record['guid'],record['entityType'],record['name']) for record in data]
                       
@@ -382,8 +482,36 @@ def main(days_back: Optional[int] = None):
                    all_orders_sql_data = []
 
                    # SQL query to insert data
-                   all_orders_sql_query = """INSERT INTO GRATLYDB.SRC_ALLORDERS(RESTAURANTGUID,ORDERGUID,DISPLAYNUMBER,BUSINESSDATE,ORDERSOURCE,TABLEGUID,ORDERPAIDDATE,VOIDED,OPENEDDATE,PREPTIME,PAYMENTTYPE,REFUNDSTATUS,PAYMENTSTATUS,NETAMOUNT,
-                       TIPAMOUNT,GRATUITYAMOUNT,TAXAMOUNT,TOTALAMOUNT,EMPLOYEEGUID,NUMBEROFGUESTS,DURATION,APPROVALSTATUS) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+                   all_orders_sql_query = (
+                       "INSERT INTO GRATLYDB.SRC_ALLORDERS("
+                       "RESTAURANTGUID,ORDERGUID,DISPLAYNUMBER,BUSINESSDATE,ORDERSOURCE,TABLEGUID,"
+                       "ORDERPAIDDATE,VOIDED,OPENEDDATE,PREPTIME,PAYMENTTYPE,REFUNDSTATUS,"
+                       "PAYMENTSTATUS,NETAMOUNT,TIPAMOUNT,GRATUITYAMOUNT,TAXAMOUNT,TOTALAMOUNT,"
+                       "EMPLOYEEGUID,NUMBEROFGUESTS,DURATION,APPROVALSTATUS"
+                       ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+                       "%s, %s, %s, %s, %s) "
+                       "ON DUPLICATE KEY UPDATE "
+                       "DISPLAYNUMBER=VALUES(DISPLAYNUMBER),"
+                       "BUSINESSDATE=VALUES(BUSINESSDATE),"
+                       "ORDERSOURCE=VALUES(ORDERSOURCE),"
+                       "TABLEGUID=VALUES(TABLEGUID),"
+                       "ORDERPAIDDATE=VALUES(ORDERPAIDDATE),"
+                       "VOIDED=VALUES(VOIDED),"
+                       "OPENEDDATE=VALUES(OPENEDDATE),"
+                       "PREPTIME=VALUES(PREPTIME),"
+                       "PAYMENTTYPE=VALUES(PAYMENTTYPE),"
+                       "REFUNDSTATUS=VALUES(REFUNDSTATUS),"
+                       "PAYMENTSTATUS=VALUES(PAYMENTSTATUS),"
+                       "NETAMOUNT=VALUES(NETAMOUNT),"
+                       "TIPAMOUNT=VALUES(TIPAMOUNT),"
+                       "GRATUITYAMOUNT=VALUES(GRATUITYAMOUNT),"
+                       "TAXAMOUNT=VALUES(TAXAMOUNT),"
+                       "TOTALAMOUNT=VALUES(TOTALAMOUNT),"
+                       "EMPLOYEEGUID=VALUES(EMPLOYEEGUID),"
+                       "NUMBEROFGUESTS=VALUES(NUMBEROFGUESTS),"
+                       "DURATION=VALUES(DURATION),"
+                       "APPROVALSTATUS=VALUES(APPROVALSTATUS)"
+                   )
 
                    for record in data:
                        restaurantID = headers_init

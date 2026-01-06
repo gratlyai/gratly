@@ -68,7 +68,7 @@ export const routePermissionMap: Record<string, PermissionKey | null> = {
   "shift-payout": "createPayoutSchedules",
   team: "manageTeam",
   reports: null,
+  billing: "adminAccess",
   settings: "adminAccess",
   profile: null,
-  subscription: "adminAccess",
 };

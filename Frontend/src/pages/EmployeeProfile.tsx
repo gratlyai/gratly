@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import type { Employee, StripeConnectedAccountSummary } from "../api/employees";
-import { fetchEmployee, fetchStripeConnectedAccount } from "../api/employees";
+import type { Employee } from "../api/employees";
+import { fetchEmployee } from "../api/employees";
 import {
   fetchPermissionCatalog,
   fetchUserPermissions,
@@ -22,28 +22,6 @@ const formatValue = (value: string | null | undefined) => {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : "N/A";
 };
-const formatCapabilities = (capabilities?: Record<string, string> | null) => {
-  if (!capabilities) {
-    return "N/A";
-  }
-  const entries = Object.entries(capabilities)
-    .map(([key, value]) => `${key}: ${value}`)
-    .join(", ");
-  return entries.length > 0 ? entries : "N/A";
-};
-const formatCardDetails = (card?: StripeConnectedAccountSummary["card"] | null) => {
-  if (!card) {
-    return "N/A";
-  }
-  const brand = card.brand ?? "Card";
-  const last4 = card.last4 ? `**** ${card.last4}` : "****";
-  const expMonth = card.expMonth ? String(card.expMonth).padStart(2, "0") : "--";
-  const expYear = card.expYear ? String(card.expYear) : "--";
-  const funding = card.funding ? `, ${card.funding}` : "";
-  const country = card.country ? `, ${card.country}` : "";
-  return `${brand} ${last4} exp ${expMonth}/${expYear}${funding}${country}`;
-};
-
 export default function EmployeeProfile() {
   const { employeeGuid } = useParams();
   const navigate = useNavigate();
@@ -53,7 +31,6 @@ export default function EmployeeProfile() {
   const [permissionCatalog, setPermissionCatalog] =
     useState<PermissionDescriptor[]>(permissionConfig);
   const [isSavingPermissions, setIsSavingPermissions] = useState(false);
-  const [stripeAccount, setStripeAccount] = useState<StripeConnectedAccountSummary | null>(null);
   const [currentUserPermissions] = useState<PermissionState>(() =>
     getStoredPermissions(localStorage.getItem("userId")),
   );
@@ -82,32 +59,6 @@ export default function EmployeeProfile() {
       .finally(() => {
         if (isMounted) {
           setIsLoading(false);
-        }
-      });
-    return () => {
-      isMounted = false;
-    };
-  }, [employeeGuid]);
-
-  useEffect(() => {
-    if (!employeeGuid) {
-      return;
-    }
-    let isMounted = true;
-    fetchStripeConnectedAccount(employeeGuid)
-      .then((summary) => {
-        if (!isMounted) {
-          return;
-        }
-        if (!summary?.accountId) {
-          setStripeAccount(null);
-          return;
-        }
-        setStripeAccount(summary);
-      })
-      .catch(() => {
-        if (isMounted) {
-          setStripeAccount(null);
         }
       });
     return () => {
@@ -303,32 +254,6 @@ export default function EmployeeProfile() {
         </div>
       )}
 
-      {!isLoading && employee ? (
-        <section className="mt-6 rounded-xl border border-gray-200 bg-white p-6 shadow-md">
-          <h2 className="mb-4 text-lg font-bold text-gray-900">Stripe payout account</h2>
-          <div className="space-y-3">
-            <div className="flex items-center justify-between rounded-lg bg-gray-50 px-4 py-3 text-sm">
-              <span className="font-medium text-gray-900">Connected account</span>
-              <span
-                className={`text-xs font-semibold ${
-                  stripeAccount ? "text-emerald-600" : "text-gray-500"
-                }`}
-              >
-                {stripeAccount ? "Connected" : "Not created"}
-              </span>
-            </div>
-            {stripeAccount?.accountId ? (
-              <div className="rounded-lg bg-gray-50 px-4 py-3 text-xs text-gray-600">
-                <p className="break-all">Account ID: {stripeAccount.accountId}</p>
-                <p>Business type: {stripeAccount.businessType ?? "N/A"}</p>
-                <p>Default currency: {stripeAccount.defaultCurrency ?? "N/A"}</p>
-                <p>Capabilities: {formatCapabilities(stripeAccount.capabilities)}</p>
-                <p>Card: {formatCardDetails(stripeAccount.card)}</p>
-              </div>
-            ) : null}
-          </div>
-        </section>
-      ) : null}
     </main>
   );
 }

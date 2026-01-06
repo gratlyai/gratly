@@ -32,8 +32,9 @@ if __package__:
     from .password_reset import router as password_reset_router
     from .approvals import router as approvals_router
     from .reports import router as reports_router
-    from .stripe_payments import router as stripe_payments_router
+    from .astra_payments import router as astra_payments_router
     from .payment_routing import router as payment_routing_router
+    from .billing import router as billing_router
 else:
     from security import hash_password, verify_password
     from email_utils import send_sendgrid_email
@@ -58,8 +59,9 @@ else:
     from password_reset import router as password_reset_router
     from approvals import router as approvals_router
     from reports import router as reports_router
-    from stripe_payments import router as stripe_payments_router
+    from astra_payments import router as astra_payments_router
     from payment_routing import router as payment_routing_router
+    from billing import router as billing_router
 
 app = FastAPI()
 
@@ -172,6 +174,8 @@ app.add_middleware(
 
 @app.middleware("http")
 async def apply_request_timezone(request: Request, call_next):
+    if request.url.path == "/api/webhooks/stripe":
+        return await call_next(request)
     timezone_value = None
     restaurant_id = request.query_params.get("restaurant_id") or request.query_params.get("restaurantId")
     restaurant_guid = request.query_params.get("restaurant_guid") or request.query_params.get("restaurantGuid")
@@ -234,8 +238,9 @@ app.include_router(payout_schedules_router)
 app.include_router(password_reset_router)
 app.include_router(approvals_router)
 app.include_router(reports_router)
-app.include_router(stripe_payments_router)
+app.include_router(astra_payments_router)
 app.include_router(payment_routing_router)
+app.include_router(billing_router)
 
 print("DB HOST:", _get_env_or_ini("DB_HOST"))
 print("DB USER:", _get_env_or_ini("DB_USER"))
@@ -731,18 +736,20 @@ class PermissionDescriptor(BaseModel):
 class OnboardRestaurantPayload(BaseModel):
     userId: int
     restaurantGuid: str
-    secretKey: str
-    clientSecret: str
-    userAccessType: str
-    adminName: str
-    adminEmail: str
+    payoutFeePayer: Optional[str] = None
+    payoutFee: Optional[str] = None
+    activationDate: Optional[str] = None
+    freePeriod: Optional[str] = None
+    billingDate: Optional[str] = None
+    billingAmount: Optional[str] = None
+    adminName: Optional[str] = None
+    adminPhone: Optional[str] = None
+    adminEmail: Optional[str] = None
     restaurantName: Optional[str] = None
 
 class OnboardRestaurantResponse(BaseModel):
     success: bool
     restaurantId: int
-    inviteId: int
-    signupLink: str
 
 class TeamInvitePayload(BaseModel):
     user_id: int
@@ -751,11 +758,45 @@ class TeamInvitePayload(BaseModel):
     last_name: Optional[str] = None
     employee_guid: Optional[str] = None
 
+
+class OnboardingDetailsResponse(BaseModel):
+    restaurantGuid: str
+    payoutFeePayer: Optional[str] = None
+    payoutFee: Optional[str] = None
+    activationDate: Optional[str] = None
+    freePeriod: Optional[str] = None
+    billingDate: Optional[str] = None
+    billingAmount: Optional[str] = None
+    adminName: Optional[str] = None
+    adminPhone: Optional[str] = None
+    adminEmail: Optional[str] = None
+
 class ContactPayload(BaseModel):
     name: str
     email: str
     phone: Optional[str] = None
     message: str
+
+class BillingConfigResponse(BaseModel):
+    stripePriceId: Optional[str] = None
+    billingAmount: Optional[str] = None
+    billingCurrency: Optional[str] = None
+
+class BillingConfigPayload(BaseModel):
+    userId: int
+    stripePriceId: Optional[str] = None
+    billingAmount: Optional[str] = None
+    billingCurrency: Optional[str] = None
+
+class RestaurantSelectionOption(BaseModel):
+    restaurantId: Optional[int] = None
+    restaurantGuid: Optional[str] = None
+    restaurantName: Optional[str] = None
+
+class RestaurantSelectionPayload(BaseModel):
+    userId: int
+    restaurantId: Optional[int] = None
+    restaurantGuid: Optional[str] = None
 
 class EmployeeJobResponse(BaseModel):
     employeeGuid: Optional[str] = None
@@ -827,11 +868,30 @@ def _update_invite_log(cursor, invite_id: int, status: str, provider_response: O
 
 
 @app.get("/employees", response_model=List[EmployeeResponse])
-def get_employees():
+def get_employees(user_id: Optional[int] = None, restaurant_id: Optional[int] = None):
     cursor = _get_cursor(dictionary=True)
     try:
-        cursor.execute(
-            """
+        restaurant_guid = None
+        if restaurant_id is not None:
+            cursor.execute(
+                """
+                SELECT RESTAURANTGUID AS restaurant_guid
+                FROM GRATLYDB.SRC_ONBOARDING
+                WHERE RESTAURANTID = %s
+                LIMIT 1
+                """,
+                (restaurant_id,),
+            )
+            row = cursor.fetchone()
+            restaurant_guid = row.get("restaurant_guid") if row else None
+            if not restaurant_guid:
+                return []
+        elif user_id is not None:
+            restaurant_guid = _fetch_restaurant_guid(user_id)
+            if not restaurant_guid:
+                return []
+
+        query = """
             SELECT
                 user_master.USERID AS userId,
                 SRC_EMPLOYEES.EMPLOYEEGUID AS employeeGuid,
@@ -843,9 +903,13 @@ def get_employees():
             FROM GRATLYDB.SRC_EMPLOYEES
             LEFT JOIN GRATLYDB.USER_MASTER AS user_master
                 ON user_master.EMAIL = SRC_EMPLOYEES.EMAIL
-            order by SRC_EMPLOYEES.employeefname
-            """
-        )
+        """
+        params: List[object] = []
+        if restaurant_guid:
+            query += " WHERE SRC_EMPLOYEES.RESTAURANTGUID = %s"
+            params.append(restaurant_guid)
+        query += " ORDER BY SRC_EMPLOYEES.employeefname"
+        cursor.execute(query, params)
         return cursor.fetchall()
     except pymysql.MySQLError as err:
         raise HTTPException(status_code=500, detail=f"Error fetching employees: {err}")
@@ -986,18 +1050,11 @@ def onboard_restaurant(payload: OnboardRestaurantPayload):
     _require_superadmin_access(payload.userId)
     if not payload.restaurantGuid:
         raise HTTPException(status_code=400, detail="restaurantGuid is required")
-    if not payload.secretKey:
-        raise HTTPException(status_code=400, detail="secretKey is required")
-    if not payload.clientSecret:
-        raise HTTPException(status_code=400, detail="clientSecret is required")
-    if not payload.userAccessType:
-        raise HTTPException(status_code=400, detail="userAccessType is required")
-    if not payload.adminEmail:
-        raise HTTPException(status_code=400, detail="adminEmail is required")
+    if payload.payoutFeePayer and payload.payoutFeePayer not in ("restaurant", "employees"):
+        raise HTTPException(status_code=400, detail="payoutFeePayer must be restaurant or employees")
 
     cursor = _get_cursor(dictionary=True)
     conn = cursor.connection
-    invite_id = None
     try:
         cursor.execute(
             """
@@ -1009,92 +1066,186 @@ def onboard_restaurant(payload: OnboardRestaurantPayload):
             (payload.restaurantGuid,),
         )
         existing = cursor.fetchone()
+
+        def _clean_value(value: Optional[str]) -> Optional[str]:
+            if value is None:
+                return None
+            cleaned = value.strip()
+            return cleaned if cleaned else None
+
         if existing:
-            raise HTTPException(status_code=400, detail="Restaurant already onboarded")
-
-        cursor.execute(
-            """
-            INSERT INTO GRATLYDB.SRC_ONBOARDING (
-                RESTAURANTGUID,
-                SECRETKEY,
-                CLIENTSECRET,
-                USERACCESSTYPE
+            restaurant_id = existing["restaurant_id"]
+            cursor.execute(
+                """
+                UPDATE GRATLYDB.SRC_ONBOARDING
+                SET
+                    PAYOUT_FEE_PAYER = COALESCE(%s, PAYOUT_FEE_PAYER),
+                    PAYOUT_FEE = COALESCE(%s, PAYOUT_FEE),
+                    ACTIVATION_DATE = COALESCE(%s, ACTIVATION_DATE),
+                    FREE_PERIOD = COALESCE(%s, FREE_PERIOD),
+                    BILLING_DATE = COALESCE(%s, BILLING_DATE),
+                    BILLING_AMOUNT = COALESCE(%s, BILLING_AMOUNT),
+                    ADMIN_NAME = COALESCE(%s, ADMIN_NAME),
+                    ADMIN_PHONE = COALESCE(%s, ADMIN_PHONE),
+                    ADMIN_EMAIL = COALESCE(%s, ADMIN_EMAIL)
+                WHERE RESTAURANTGUID = %s
+                """,
+                (
+                    _clean_value(payload.payoutFeePayer),
+                    _clean_value(payload.payoutFee),
+                    _clean_value(payload.activationDate),
+                    _clean_value(payload.freePeriod),
+                    _clean_value(payload.billingDate),
+                    _clean_value(payload.billingAmount),
+                    _clean_value(payload.adminName),
+                    _clean_value(payload.adminPhone),
+                    _clean_value(payload.adminEmail),
+                    payload.restaurantGuid,
+                ),
             )
-            VALUES (%s, %s, %s, %s)
-            """,
-            (
-                payload.restaurantGuid,
-                payload.secretKey,
-                payload.clientSecret,
-                payload.userAccessType,
-            ),
-        )
-        restaurant_id = cursor.lastrowid
-
-        restaurant_name = payload.restaurantName or f"Restaurant {payload.restaurantGuid}"
-        cursor.execute(
-            """
-            INSERT INTO GRATLYDB.SRC_RESTAURANTDETAILS (
-                RESTAURANTGUID,
-                RESTAURANTNAME
+        else:
+            cursor.execute(
+                """
+                INSERT INTO GRATLYDB.SRC_ONBOARDING (
+                    RESTAURANTGUID,
+                    PAYOUT_FEE_PAYER,
+                    PAYOUT_FEE,
+                    ACTIVATION_DATE,
+                    FREE_PERIOD,
+                    BILLING_DATE,
+                    BILLING_AMOUNT,
+                    ADMIN_NAME,
+                    ADMIN_PHONE,
+                    ADMIN_EMAIL
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    payload.restaurantGuid,
+                    _clean_value(payload.payoutFeePayer),
+                    _clean_value(payload.payoutFee),
+                    _clean_value(payload.activationDate),
+                    _clean_value(payload.freePeriod),
+                    _clean_value(payload.billingDate),
+                    _clean_value(payload.billingAmount),
+                    _clean_value(payload.adminName),
+                    _clean_value(payload.adminPhone),
+                    _clean_value(payload.adminEmail),
+                ),
             )
-            VALUES (%s, %s)
-            ON DUPLICATE KEY UPDATE
-                RESTAURANTNAME = COALESCE(VALUES(RESTAURANTNAME), RESTAURANTNAME)
-            """,
-            (payload.restaurantGuid, restaurant_name),
-        )
+            restaurant_id = cursor.lastrowid
 
-        admin_name = (payload.adminName or "").strip()
-        first_name = admin_name.split(" ")[0] if admin_name else None
-        last_name = " ".join(admin_name.split(" ")[1:]) if admin_name else None
-        invite_payload = TeamInvitePayload(
-            user_id=payload.userId,
-            email=payload.adminEmail,
-            first_name=first_name,
-            last_name=last_name,
-            employee_guid=None,
-        )
-        invite_id = _insert_invite_log(cursor, invite_payload, "pending")
-        invite_token = _create_team_invite_token_with_value(
-            cursor,
-            invite_id,
-            restaurant_id,
-            payload.restaurantGuid,
-        )
-        signup_link = _build_invite_signup_link(invite_token)
-        text_content, html_content = _build_invite_email_content(
-            restaurant_name,
-            admin_name or payload.adminEmail,
-            signup_link,
-        )
+        if payload.restaurantName:
+            cursor.execute(
+                """
+                UPDATE GRATLYDB.SRC_RESTAURANTDETAILS
+                SET RESTAURANTNAME = %s
+                WHERE RESTAURANTGUID = %s
+                """,
+                (payload.restaurantName, payload.restaurantGuid),
+            )
+
         conn.commit()
-        _send_sendgrid_email(
-            to_email=payload.adminEmail,
-            subject=f"You're invited to Gratly by {restaurant_name}",
-            content=text_content,
-            html_content=html_content,
-            sender_name=restaurant_name,
-        )
-        _update_invite_log(cursor, invite_id, "sent")
-        conn.commit()
-        return {
-            "success": True,
-            "restaurantId": restaurant_id,
-            "inviteId": invite_id,
-            "signupLink": signup_link,
-        }
-    except HTTPException as err:
-        if invite_id is not None:
-            try:
-                _update_invite_log(cursor, invite_id, "failed", err.detail)
-                conn.commit()
-            except pymysql.MySQLError:
-                conn.rollback()
-        raise
+        return {"success": True, "restaurantId": restaurant_id}
     except pymysql.MySQLError as err:
         conn.rollback()
-        raise HTTPException(status_code=500, detail=f"Error onboarding restaurant: {err}")
+        raise HTTPException(status_code=500, detail=f"Error updating restaurant: {err}")
+    finally:
+        cursor.close()
+
+@app.get("/superadmin/onboarding-details", response_model=Optional[OnboardingDetailsResponse])
+def get_onboarding_details(user_id: int, restaurant_guid: str):
+    _require_superadmin_access(user_id)
+    if not restaurant_guid:
+        raise HTTPException(status_code=400, detail="restaurant_guid is required")
+    cursor = _get_cursor(dictionary=True)
+    try:
+        cursor.execute(
+            """
+            SELECT
+                RESTAURANTGUID AS restaurant_guid,
+                PAYOUT_FEE_PAYER AS payout_fee_payer,
+                PAYOUT_FEE AS payout_fee,
+                ACTIVATION_DATE AS activation_date,
+                FREE_PERIOD AS free_period,
+                BILLING_DATE AS billing_date,
+                BILLING_AMOUNT AS billing_amount,
+                ADMIN_NAME AS admin_name,
+                ADMIN_PHONE AS admin_phone,
+                ADMIN_EMAIL AS admin_email
+            FROM GRATLYDB.SRC_ONBOARDING
+            WHERE RESTAURANTGUID = %s
+            LIMIT 1
+            """,
+            (restaurant_guid,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "restaurantGuid": row.get("restaurant_guid"),
+            "payoutFeePayer": row.get("payout_fee_payer"),
+            "payoutFee": row.get("payout_fee"),
+            "activationDate": str(row.get("activation_date")) if row.get("activation_date") else None,
+            "freePeriod": row.get("free_period"),
+            "billingDate": str(row.get("billing_date")) if row.get("billing_date") else None,
+            "billingAmount": row.get("billing_amount"),
+            "adminName": row.get("admin_name"),
+            "adminPhone": row.get("admin_phone"),
+            "adminEmail": row.get("admin_email"),
+        }
+    finally:
+        cursor.close()
+
+@app.get("/superadmin/billing-config", response_model=BillingConfigResponse)
+def get_billing_config(user_id: int):
+    _require_superadmin_access(user_id)
+    cursor = _get_cursor(dictionary=True)
+    try:
+        cursor.execute(
+            """
+            SELECT CONFIG_KEY AS config_key, CONFIG_VALUE AS config_value
+            FROM GRATLYDB.BILLING_CONFIG
+            WHERE CONFIG_KEY IN ('stripe_price_id', 'billing_amount', 'billing_currency')
+            """
+        )
+        rows = cursor.fetchall()
+        config_map = {row["config_key"]: row["config_value"] for row in rows}
+        return {
+            "stripePriceId": config_map.get("stripe_price_id") or os.getenv("STRIPE_PRICE_ID"),
+            "billingAmount": config_map.get("billing_amount"),
+            "billingCurrency": config_map.get("billing_currency") or "USD",
+        }
+    finally:
+        cursor.close()
+
+@app.put("/superadmin/billing-config", response_model=BillingConfigResponse)
+def update_billing_config(payload: BillingConfigPayload):
+    _require_superadmin_access(payload.userId)
+    cursor = _get_cursor(dictionary=True)
+    conn = cursor.connection
+    try:
+        updates = {
+            "stripe_price_id": payload.stripePriceId,
+            "billing_amount": payload.billingAmount,
+            "billing_currency": payload.billingCurrency,
+        }
+        for key, value in updates.items():
+            if value is None:
+                continue
+            cursor.execute(
+                """
+                INSERT INTO GRATLYDB.BILLING_CONFIG (CONFIG_KEY, CONFIG_VALUE)
+                VALUES (%s, %s)
+                ON DUPLICATE KEY UPDATE CONFIG_VALUE = VALUES(CONFIG_VALUE)
+                """,
+                (key, value),
+            )
+        conn.commit()
+        return get_billing_config(payload.userId)
+    except pymysql.MySQLError as err:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error updating billing config: {err}")
     finally:
         cursor.close()
 
@@ -1511,6 +1662,227 @@ def update_user_permissions(user_id: int, payload: UserPermissionsPayload, actor
         return permissions
     except pymysql.MySQLError as err:
         raise HTTPException(status_code=500, detail=f"Error updating user permissions: {err}")
+    finally:
+        cursor.close()
+
+@app.get("/restaurant-selection", response_model=List[RestaurantSelectionOption])
+def list_restaurant_selection_options(user_id: int):
+    permission_names = _fetch_user_permission_names(user_id)
+    permissions = _serialize_permissions(permission_names) or {}
+    if not (permissions.get("adminAccess") or permissions.get("superadminAccess")):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    is_superadmin = bool(permissions.get("superadminAccess"))
+
+    cursor = _get_cursor(dictionary=True)
+    try:
+        if not is_superadmin:
+            cursor.execute(
+                """
+                SELECT 1
+                FROM GRATLYDB.USERRESTAURANT
+                WHERE USERID = %s
+                  AND RESTAURANTID IS NOT NULL
+                LIMIT 1
+                """,
+                (user_id,),
+            )
+            if cursor.fetchone():
+                return []
+            cursor.execute(
+                """
+                SELECT
+                    ob.RESTAURANTID AS restaurant_id,
+                    rd.RESTAURANTGUID AS restaurant_guid,
+                    rd.RESTAURANTNAME AS restaurant_name
+                FROM GRATLYDB.SRC_ONBOARDING ob
+                LEFT JOIN GRATLYDB.SRC_RESTAURANTDETAILS rd
+                    ON rd.RESTAURANTGUID = ob.RESTAURANTGUID
+                LEFT JOIN GRATLYDB.USERRESTAURANT ur
+                    ON ur.RESTAURANTID = ob.RESTAURANTID
+                WHERE ur.RESTAURANTID IS NULL
+                ORDER BY rd.RESTAURANTNAME, ob.RESTAURANTID
+                """
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT
+                    restaurant_id,
+                    restaurant_guid,
+                    restaurant_name
+                FROM (
+                    SELECT
+                        ob.RESTAURANTID AS restaurant_id,
+                        rd.RESTAURANTGUID AS restaurant_guid,
+                        rd.RESTAURANTNAME AS restaurant_name
+                    FROM GRATLYDB.SRC_ONBOARDING ob
+                    LEFT JOIN GRATLYDB.SRC_RESTAURANTDETAILS rd
+                        ON rd.RESTAURANTGUID = ob.RESTAURANTGUID
+                    UNION ALL
+                    SELECT
+                        ob.RESTAURANTID AS restaurant_id,
+                        rd.RESTAURANTGUID AS restaurant_guid,
+                        rd.RESTAURANTNAME AS restaurant_name
+                    FROM GRATLYDB.SRC_RESTAURANTDETAILS rd
+                    LEFT JOIN GRATLYDB.SRC_ONBOARDING ob
+                        ON ob.RESTAURANTGUID = rd.RESTAURANTGUID
+                    WHERE ob.RESTAURANTGUID IS NULL
+                ) restaurants
+                ORDER BY restaurant_name, restaurant_guid, restaurant_id
+                """
+            )
+        rows = cursor.fetchall()
+        return [
+            {
+                "restaurantId": row.get("restaurant_id"),
+                "restaurantGuid": row.get("restaurant_guid"),
+                "restaurantName": row.get("restaurant_name"),
+            }
+            for row in rows
+        ]
+    finally:
+        cursor.close()
+
+@app.post("/restaurant-selection", response_model=RestaurantSelectionOption)
+def assign_restaurant_selection(payload: RestaurantSelectionPayload):
+    user_id = payload.userId
+    restaurant_id = payload.restaurantId
+    restaurant_guid = payload.restaurantGuid
+    permission_names = _fetch_user_permission_names(user_id)
+    permissions = _serialize_permissions(permission_names) or {}
+    if not (permissions.get("adminAccess") or permissions.get("superadminAccess")):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    is_superadmin = bool(permissions.get("superadminAccess"))
+
+    cursor = _get_cursor(dictionary=True)
+    try:
+        if restaurant_id is None and not restaurant_guid:
+            raise HTTPException(status_code=400, detail="restaurantId or restaurantGuid is required")
+        cursor.execute(
+            "SELECT 1 FROM GRATLYDB.USER_MASTER WHERE USERID = %s LIMIT 1",
+            (user_id,),
+        )
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="User not found")
+
+        restaurant_row = None
+        if restaurant_id is not None:
+            cursor.execute(
+                """
+                SELECT
+                    ob.RESTAURANTID AS restaurant_id,
+                    rd.RESTAURANTGUID AS restaurant_guid,
+                    rd.RESTAURANTNAME AS restaurant_name
+                FROM GRATLYDB.SRC_ONBOARDING ob
+                JOIN GRATLYDB.SRC_RESTAURANTDETAILS rd
+                    ON rd.RESTAURANTGUID = ob.RESTAURANTGUID
+                WHERE ob.RESTAURANTID = %s
+                LIMIT 1
+                """,
+                (restaurant_id,),
+            )
+            restaurant_row = cursor.fetchone()
+            if not restaurant_row:
+                raise HTTPException(status_code=404, detail="Restaurant not found")
+            restaurant_guid = restaurant_row.get("restaurant_guid") or restaurant_guid
+        elif restaurant_guid:
+            cursor.execute(
+                """
+                SELECT
+                    ob.RESTAURANTID AS restaurant_id,
+                    rd.RESTAURANTGUID AS restaurant_guid,
+                    rd.RESTAURANTNAME AS restaurant_name
+                FROM GRATLYDB.SRC_RESTAURANTDETAILS rd
+                LEFT JOIN GRATLYDB.SRC_ONBOARDING ob
+                    ON ob.RESTAURANTGUID = rd.RESTAURANTGUID
+                WHERE rd.RESTAURANTGUID = %s
+                LIMIT 1
+                """,
+                (restaurant_guid,),
+            )
+            restaurant_row = cursor.fetchone()
+            if not restaurant_row:
+                raise HTTPException(status_code=404, detail="Restaurant not found")
+            if restaurant_row.get("restaurant_id") is not None:
+                restaurant_id = restaurant_row["restaurant_id"]
+            elif is_superadmin:
+                cursor.execute(
+                    """
+                    INSERT INTO GRATLYDB.SRC_ONBOARDING (RESTAURANTGUID)
+                    VALUES (%s)
+                    """,
+                    (restaurant_guid,),
+                )
+                restaurant_id = cursor.lastrowid
+                restaurant_row["restaurant_id"] = restaurant_id
+            else:
+                raise HTTPException(status_code=400, detail="Restaurant is not onboarded")
+
+        if not is_superadmin:
+            cursor.execute(
+                """
+                SELECT 1
+                FROM GRATLYDB.USERRESTAURANT
+                WHERE RESTAURANTID = %s
+                LIMIT 1
+                """,
+                (restaurant_id,),
+            )
+            if cursor.fetchone():
+                raise HTTPException(status_code=409, detail="Restaurant already assigned")
+
+        cursor.execute(
+            """
+            UPDATE GRATLYDB.USERRESTAURANT
+            SET RESTAURANTID = %s
+            WHERE USERID = %s
+            """,
+            (restaurant_id, user_id),
+        )
+        if cursor.rowcount == 0:
+            cursor.execute(
+                """
+                INSERT INTO GRATLYDB.USERRESTAURANT (USERID, RESTAURANTID)
+                VALUES (%s, %s)
+                """,
+                (user_id, restaurant_id),
+            )
+
+        cursor.execute(
+            """
+            SELECT PERMISSIONSID AS permission_id
+            FROM GRATLYDB.MSTR_PERMISSIONS
+            WHERE PERMISSIONSNAME = %s
+              AND (DELETED IS NULL OR DELETED = 0)
+            LIMIT 1
+            """,
+            (PERMISSION_LABELS["adminAccess"],),
+        )
+        permission_row = cursor.fetchone()
+        if permission_row:
+            cursor.execute(
+                """
+                SELECT 1
+                FROM GRATLYDB.USER_PERMISSIONS
+                WHERE USERID = %s AND PERMISSIONSID = %s
+                LIMIT 1
+                """,
+                (user_id, permission_row["permission_id"]),
+            )
+            if not cursor.fetchone():
+                cursor.execute(
+                    """
+                    INSERT INTO GRATLYDB.USER_PERMISSIONS (USERID, PERMISSIONSID)
+                    VALUES (%s, %s)
+                    """,
+                    (user_id, permission_row["permission_id"]),
+                )
+
+        return {
+            "restaurantId": restaurant_row.get("restaurant_id"),
+            "restaurantGuid": restaurant_row.get("restaurant_guid"),
+            "restaurantName": restaurant_row.get("restaurant_name"),
+        }
     finally:
         cursor.close()
 

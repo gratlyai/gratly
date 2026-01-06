@@ -7,29 +7,16 @@ import Employees from "./pages/Employees";
 import EmployeeProfile from "./pages/EmployeeProfile";
 import Reports from "./pages/Reports";
 import Settings from "./pages/Settings";
+import Billing from "./pages/Billing";
 import Reconciliation from "./pages/Reconciliation";
 import GratlyShiftPayout from "./GratlyShiftPayout";
 import GratlyProfile from "./GratlyProfile";
 import PasswordReset from "./pages/PasswordReset";
 import PasswordResetForm from "./pages/PasswordResetForm";
-import Subscription from "./pages/Subscription";
-import GlobalAdmin from "./pages/GlobalAdmin";
 import { PrivateRoute } from "./auth/PrivateRoute";
 import AppLayout from "./layouts/AppLayout";
 import { getStoredPermissions } from "./auth/permissions";
 import { fetchUserPermissions } from "./api/permissions";
-
-const AdminRoute = ({ children }: { children: ReactNode }) => {
-  const { restaurantKey } = useParams();
-  const storedUserId = localStorage.getItem("userId") || "";
-  const permissions = getStoredPermissions(storedUserId);
-  const isAdminUser = permissions.adminAccess || permissions.superadminAccess;
-  if (!isAdminUser) {
-    const fallbackPath = restaurantKey ? `/business/${restaurantKey}/home` : "/login";
-    return <Navigate to={fallbackPath} replace />;
-  }
-  return <>{children}</>;
-};
 
 const SuperAdminRoute = ({ children }: { children: ReactNode }) => {
   const { restaurantKey } = useParams();
@@ -80,6 +67,55 @@ const SuperAdminRoute = ({ children }: { children: ReactNode }) => {
   return <>{children}</>;
 };
 
+const AdminRoute = ({ children }: { children: ReactNode }) => {
+  const { restaurantKey } = useParams();
+  const storedUserId = localStorage.getItem("userId") || "";
+  const [isAllowed, setIsAllowed] = useState<boolean | null>(() => {
+    if (!storedUserId) {
+      return false;
+    }
+    const cached = getStoredPermissions(storedUserId);
+    return cached.adminAccess || cached.superadminAccess ? true : null;
+  });
+
+  useEffect(() => {
+    if (!storedUserId) {
+      setIsAllowed(false);
+      return;
+    }
+    const numericUserId = Number(storedUserId);
+    if (!Number.isFinite(numericUserId)) {
+      setIsAllowed(false);
+      return;
+    }
+    if (isAllowed === true) {
+      return;
+    }
+    fetchUserPermissions(numericUserId)
+      .then((data) => {
+        localStorage.setItem(`employeePermissions:${numericUserId}`, JSON.stringify(data));
+        setIsAllowed(Boolean(data.adminAccess || data.superadminAccess));
+      })
+      .catch(() => {
+        const permissions = getStoredPermissions(storedUserId);
+        setIsAllowed(Boolean(permissions.adminAccess || permissions.superadminAccess));
+      });
+  }, [storedUserId]);
+
+  if (isAllowed === null) {
+    return (
+      <div className="mx-auto w-full max-w-3xl px-6 py-10 text-sm text-gray-600">
+        Checking admin access...
+      </div>
+    );
+  }
+  if (!isAllowed) {
+    const fallbackPath = restaurantKey ? `/business/${restaurantKey}/home` : "/login";
+    return <Navigate to={fallbackPath} replace />;
+  }
+  return <>{children}</>;
+};
+
 export default function App() {
   return (
     <Routes>
@@ -88,16 +124,6 @@ export default function App() {
       <Route path="/forgot-password" element={<PasswordReset />} />
       <Route path="/reset-password" element={<PasswordResetForm />} />
       <Route path="/signup" element={<GratlySignUp />} />
-      <Route
-        path="/global-admin"
-        element={
-          <PrivateRoute>
-            <SuperAdminRoute>
-              <GlobalAdmin />
-            </SuperAdminRoute>
-          </PrivateRoute>
-        }
-      />
       <Route
         path="/business/:restaurantKey"
         element={
@@ -113,6 +139,14 @@ export default function App() {
         <Route path="team/:employeeGuid" element={<EmployeeProfile />} />
         <Route path="reports" element={<Reports />} />
         <Route
+          path="billing"
+          element={
+            <AdminRoute>
+              <Billing />
+            </AdminRoute>
+          }
+        />
+        <Route
           path="settings"
           element={
             <SuperAdminRoute>
@@ -121,15 +155,6 @@ export default function App() {
           }
         />
         <Route path="profile" element={<GratlyProfile />} />
-        <Route
-          path="subscription"
-          element={
-            <AdminRoute>
-              <Subscription />
-            </AdminRoute>
-          }
-        />
-        <Route path="payment-routing" element={<Navigate to="../settings" replace />} />
       </Route>
       <Route
         path="/employees/:employeeId"

@@ -9,11 +9,18 @@ import settingsLogo from "../assets/settingslogo.png";
 import gratlyLogo from "../assets/gratlylogodash.png";
 import { getStoredPermissions, type PermissionState } from "../auth/permissions";
 import { fetchUserPermissions } from "../api/permissions";
+import {
+  assignRestaurantSelection,
+  fetchRestaurantSelectionOptions,
+  type RestaurantSelectionOption,
+} from "../api/restaurantSelection";
+import { fetchRestaurantDetails } from "../api/superadmin";
+import { fetchEmployeeConnection, fetchEmployeePayoutMethods } from "../api/astra";
 
 type NavItem = {
   label: string;
   to: string;
-  permissionKey?: "home" | "approvals" | "shift-payout" | "team" | "reports" | "settings" | "profile" | "subscription";
+  permissionKey?: "home" | "approvals" | "shift-payout" | "team" | "reports" | "billing" | "settings" | "profile";
   icon: React.ReactNode;
 };
 
@@ -84,6 +91,16 @@ const AppLayout: React.FC = () => {
   const employeeBase = activeEmployeeId ? `/employees/${activeEmployeeId}` : "/employees";
   const basePath = restaurantKey ? businessBase : employeeBase;
   const isCompactSidebar = isSidebarCollapsed && !isSidebarHovered;
+  const outletKey = restaurantKey ?? employeeId ?? "default";
+  const [restaurantOptions, setRestaurantOptions] = useState<RestaurantSelectionOption[]>([]);
+  const [selectedRestaurantValue, setSelectedRestaurantValue] = useState<string>("");
+  const [isRestaurantOptionsLoading, setIsRestaurantOptionsLoading] = useState<boolean>(false);
+  const [isRestaurantSaving, setIsRestaurantSaving] = useState<boolean>(false);
+  const [restaurantSelectionError, setRestaurantSelectionError] = useState<string | null>(null);
+  const showRestaurantSelector = isSuperAdmin || (permissions.adminAccess && !restaurantKey);
+  const [showAstraPrompt, setShowAstraPrompt] = useState<boolean>(false);
+  const [astraPromptLoading, setAstraPromptLoading] = useState<boolean>(false);
+  const [astraPromptMessage, setAstraPromptMessage] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -116,6 +133,107 @@ const AppLayout: React.FC = () => {
     };
   }, [activeEmployeeId, storedUserName]);
 
+  useEffect(() => {
+    if (!showRestaurantSelector) {
+      return;
+    }
+    const numericUserId = Number(storedUserId);
+    if (!Number.isFinite(numericUserId) || numericUserId <= 0) {
+      return;
+    }
+    setIsRestaurantOptionsLoading(true);
+    setRestaurantSelectionError(null);
+    const loadOptions = isSuperAdmin
+      ? fetchRestaurantDetails(numericUserId).then((data) =>
+          data.map((restaurant) => ({
+            restaurantId: restaurant.restaurantId ?? null,
+            restaurantGuid: restaurant.restaurantGuid ?? null,
+            restaurantName: restaurant.restaurantName ?? null,
+          })),
+        )
+      : fetchRestaurantSelectionOptions(numericUserId);
+    loadOptions
+      .then((data) => {
+        setRestaurantOptions(data);
+      })
+      .catch((error) => {
+        setRestaurantSelectionError(
+          error instanceof Error ? error.message : "Failed to load restaurants.",
+        );
+        setRestaurantOptions([]);
+      })
+      .finally(() => {
+        setIsRestaurantOptionsLoading(false);
+      });
+  }, [showRestaurantSelector, storedUserId, isSuperAdmin]);
+
+  useEffect(() => {
+    if (!restaurantOptions.length) {
+      return;
+    }
+    if (selectedRestaurantValue) {
+      return;
+    }
+    const initialId = restaurantKey || storedRestaurantKey;
+    if (!initialId) {
+      return;
+    }
+    const matched = restaurantOptions.find(
+      (option) =>
+        option.restaurantId && String(option.restaurantId) === String(initialId),
+    );
+    if (matched?.restaurantGuid) {
+      setSelectedRestaurantValue(`guid:${matched.restaurantGuid}`);
+    } else if (matched?.restaurantId) {
+      setSelectedRestaurantValue(String(matched.restaurantId));
+    }
+  }, [restaurantOptions, restaurantKey, selectedRestaurantValue, storedRestaurantKey]);
+
+  useEffect(() => {
+    if (!permissionsLoaded) {
+      return;
+    }
+    if (isSuperAdmin) {
+      setShowAstraPrompt(false);
+      return;
+    }
+    if (isBusinessUser) {
+      setShowAstraPrompt(false);
+      return;
+    }
+    if (!permissions.employeeOnly) {
+      setShowAstraPrompt(false);
+      return;
+    }
+    const numericUserId = Number(activeEmployeeId);
+    if (!Number.isFinite(numericUserId) || numericUserId <= 0) {
+      return;
+    }
+    setAstraPromptLoading(true);
+    setAstraPromptMessage(null);
+    Promise.all([
+      fetchEmployeeConnection(numericUserId),
+      fetchEmployeePayoutMethods(numericUserId),
+    ])
+      .then(([connection, payoutMethods]) => {
+        const isConnected = Boolean(connection?.connected);
+        const needsPrompt = !isConnected;
+        setShowAstraPrompt(needsPrompt);
+        if (needsPrompt) {
+          setAstraPromptMessage(
+            "You’re almost ready—complete Astra setup and add a debit card to receive instant payouts.",
+          );
+        }
+      })
+      .catch(() => {
+        // If Astra is unavailable, avoid blocking login with a modal.
+        setShowAstraPrompt(false);
+      })
+      .finally(() => {
+        setAstraPromptLoading(false);
+      });
+  }, [activeEmployeeId, permissions, permissionsLoaded]);
+
   const canAccess = (key?: NavItem["permissionKey"]) => {
     if (!key) {
       return true;
@@ -126,8 +244,8 @@ const AppLayout: React.FC = () => {
     if (key === "profile") {
       return true;
     }
-    if (key === "subscription") {
-      return isAdminUser;
+    if (key === "settings") {
+      return isSuperAdmin;
     }
     if (isAdminUser) {
       return true;
@@ -141,11 +259,108 @@ const AppLayout: React.FC = () => {
     if (key === "team") {
       return permissions.managerAccess || permissions.manageTeam;
     }
-    if (key === "settings") {
-      return isSuperAdmin;
+    if (key === "billing") {
+      return isAdminUser;
     }
     return false;
   };
+
+  const handleRestaurantSelection = async (
+    event: React.ChangeEvent<HTMLSelectElement>,
+  ): Promise<void> => {
+    const nextValue = event.target.value;
+    setSelectedRestaurantValue(nextValue);
+    setRestaurantSelectionError(null);
+    if (!nextValue) {
+      return;
+    }
+    const numericUserId = Number(storedUserId);
+    if (!Number.isFinite(numericUserId) || numericUserId <= 0) {
+      setRestaurantSelectionError("Missing user context.");
+      return;
+    }
+    const selectedOption = restaurantOptions.find((option) => {
+      if (option.restaurantId) {
+        return String(option.restaurantId) === nextValue;
+      }
+      return option.restaurantGuid ? `guid:${option.restaurantGuid}` === nextValue : false;
+    });
+    if (!selectedOption) {
+      setRestaurantSelectionError("Selected restaurant is unavailable.");
+      return;
+    }
+    const currentRestaurantId = restaurantKey || storedRestaurantKey;
+    if (
+      currentRestaurantId &&
+      selectedOption.restaurantId &&
+      String(currentRestaurantId) === String(selectedOption.restaurantId)
+    ) {
+      return;
+    }
+    setIsRestaurantSaving(true);
+    try {
+      const result = await assignRestaurantSelection(
+        numericUserId,
+        selectedOption.restaurantId ?? null,
+        selectedOption.restaurantGuid ?? null,
+      );
+      const resolvedName =
+        result.restaurantName ||
+        restaurantOptions.find(
+          (option) => option.restaurantId === result.restaurantId,
+        )?.restaurantName ||
+        "";
+      if (!result.restaurantId) {
+        throw new Error("Restaurant selection did not return an ID.");
+      }
+      localStorage.setItem("restaurantKey", String(result.restaurantId));
+      if (resolvedName) {
+        localStorage.setItem("restaurantName", resolvedName);
+      } else {
+        localStorage.removeItem("restaurantName");
+      }
+      setRestaurantOptions((prev) =>
+        prev.map((option) => {
+          if (option.restaurantGuid && option.restaurantGuid === result.restaurantGuid) {
+            return { ...option, restaurantId: result.restaurantId };
+          }
+          return option;
+        }),
+      );
+      setSelectedRestaurantValue(String(result.restaurantId));
+      try {
+        const updatedPermissions = await fetchUserPermissions(numericUserId);
+        setPermissions((prev) => ({ ...prev, ...updatedPermissions }));
+        localStorage.setItem(
+          `employeePermissions:${numericUserId}`,
+          JSON.stringify(updatedPermissions),
+        );
+      } catch (error) {
+        console.warn("Failed to refresh permissions:", error);
+      }
+      const nextBase = `/business/${result.restaurantId}`;
+      const currentBase = restaurantKey ? `/business/${restaurantKey}` : "";
+      const nextPath =
+        restaurantKey && location.pathname.startsWith(currentBase)
+          ? location.pathname.replace(currentBase, nextBase)
+          : `${nextBase}/home`;
+      navigate(nextPath, { replace: true });
+    } catch (error) {
+      setRestaurantSelectionError(
+        error instanceof Error ? error.message : "Failed to assign restaurant.",
+      );
+    } finally {
+      setIsRestaurantSaving(false);
+    }
+  };
+
+  const restaurantSelectLabel = isRestaurantOptionsLoading
+    ? "Loading restaurants..."
+    : restaurantOptions.length
+      ? "Select restaurant"
+      : "No restaurants available";
+  const isRestaurantSelectDisabled =
+    isRestaurantOptionsLoading || isRestaurantSaving || restaurantOptions.length === 0;
 
   const navItems = useMemo<NavItem[]>(
     () => [
@@ -320,7 +535,39 @@ const AppLayout: React.FC = () => {
         ) : (
           <img src={gratlyLogo} alt="Gratly Logo" className="h-12" />
         )}
-        {restaurantName ? (
+        {showRestaurantSelector ? (
+          <div className="absolute left-1/2 -translate-x-1/2">
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                Restaurant
+              </span>
+              <select
+                value={selectedRestaurantValue}
+                onChange={handleRestaurantSelection}
+                disabled={isRestaurantSelectDisabled}
+                className="h-9 w-80 rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-900 focus:border-gray-400 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <option value="">{restaurantSelectLabel}</option>
+                {restaurantOptions.map((restaurant) => {
+                  const optionValue = restaurant.restaurantId
+                    ? String(restaurant.restaurantId)
+                    : `guid:${restaurant.restaurantGuid ?? "unknown"}`;
+                  return (
+                    <option key={optionValue} value={optionValue}>
+                      {restaurant.restaurantName ?? "Unknown Restaurant"}
+                      {restaurant.restaurantId ? ` (ID ${restaurant.restaurantId})` : " (Not onboarded)"}
+                    </option>
+                  );
+                })}
+              </select>
+              {restaurantSelectionError ? (
+                <span className="text-xs font-semibold text-red-600">
+                  {restaurantSelectionError}
+                </span>
+              ) : null}
+            </div>
+          </div>
+        ) : restaurantName ? (
           <div className="absolute left-1/2 -translate-x-1/2 text-center text-lg font-semibold text-gray-700 max-w-[40vw] truncate">
             {restaurantName}
           </div>
@@ -346,17 +593,14 @@ const AppLayout: React.FC = () => {
               >
                 Profile
               </Link>
-              {restaurantKey && canAccess("subscription") ? (
-                <button
-                  type="button"
-                  className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
-                  onClick={() => {
-                    setIsUserMenuOpen(false);
-                    navigate(`${basePath}/subscription`);
-                  }}
+              {isAdminUser ? (
+                <Link
+                  to={`${basePath}/billing`}
+                  className="block w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
+                  onClick={() => setIsUserMenuOpen(false)}
                 >
-                  Subscription
-                </button>
+                  Billing
+                </Link>
               ) : null}
               <button
                 type="button"
@@ -438,9 +682,41 @@ const AppLayout: React.FC = () => {
             isSidebarCollapsed && !isSidebarHovered ? "ml-20" : "ml-64"
           }`}
         >
-          <Outlet />
+          <Outlet key={outletKey} />
         </div>
       </div>
+
+      {showAstraPrompt ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
+            <h2 className="text-lg font-semibold text-gray-900">Complete Astra onboarding</h2>
+            <p className="mt-2 text-sm text-gray-600">
+              {astraPromptMessage ??
+                "Complete your Astra onboarding and add a debit card to get paid tips and gratuities instantly."}
+            </p>
+            <div className="mt-6 flex flex-wrap items-center justify-end gap-3">
+              <button
+                type="button"
+                className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                onClick={() => setShowAstraPrompt(false)}
+              >
+                Later
+              </button>
+              <button
+                type="button"
+                disabled={astraPromptLoading}
+                className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={() => {
+                  setShowAstraPrompt(false);
+                  navigate(`${employeeBase}/profile#astra-employee-payouts`);
+                }}
+              >
+                Complete onboarding
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };

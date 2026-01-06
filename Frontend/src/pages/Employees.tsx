@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import type { Employee } from "../api/employees";
 import { fetchEmployees } from "../api/employees";
 import { api } from "../api/client";
@@ -24,7 +24,9 @@ const formatPhoneNumber = (value: string | null | undefined) => {
 };
 
 export default function Employees() {
+  const { restaurantKey } = useParams();
   const [userId, setUserId] = useState<number | null>(null);
+  const [restaurantId, setRestaurantId] = useState<number | null>(null);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showAllEmployees, setShowAllEmployees] = useState(false);
@@ -46,8 +48,32 @@ export default function Employees() {
   }, []);
 
   useEffect(() => {
+    const storedRestaurantId = restaurantKey || localStorage.getItem("restaurantKey");
+    if (storedRestaurantId) {
+      const parsedId = Number(storedRestaurantId);
+      if (Number.isFinite(parsedId)) {
+        setRestaurantId(parsedId);
+        return;
+      }
+    }
+    setRestaurantId(null);
+  }, [restaurantKey]);
+
+  useEffect(() => {
     let isMounted = true;
-    fetchEmployees()
+    if (restaurantId === null && userId === null) {
+      return () => {
+        isMounted = false;
+      };
+    }
+    setIsLoading(true);
+    const options =
+      restaurantId !== null
+        ? { restaurantId }
+        : userId !== null
+          ? { userId }
+          : undefined;
+    fetchEmployees(options)
       .then((data) => {
         if (isMounted) {
           setEmployees(data);
@@ -61,7 +87,7 @@ export default function Employees() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [restaurantId, userId]);
 
   const getEmployeeKey = (employee: Employee, index: number) =>
     employee.employeeGuid ?? employee.email ?? `employee-${index}`;

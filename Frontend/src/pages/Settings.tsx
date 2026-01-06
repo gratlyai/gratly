@@ -1,16 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
-import PaymentRouting from "./PaymentRouting";
 import {
+  fetchRestaurantDetails,
+  fetchOnboardingDetails,
   fetchRestaurantRoutingSummary,
   onboardRestaurant,
+  fetchBillingConfig,
+  updateBillingConfig,
+  type OnboardingDetails,
   type OnboardRestaurantPayload,
+  type RestaurantDetail,
   type RestaurantRoutingSummary,
+  type BillingConfig,
 } from "../api/superadmin";
 
 export default function Settings() {
   const userId = Number(localStorage.getItem("userId") || "");
+  const [restaurantOptions, setRestaurantOptions] = useState<RestaurantDetail[]>([]);
   const [restaurants, setRestaurants] = useState<RestaurantRoutingSummary[]>([]);
-  const [selectedRestaurantId, setSelectedRestaurantId] = useState<number | null>(null);
+  const [selectedRestaurantGuid, setSelectedRestaurantGuid] = useState<string>("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isOnboardOpen, setIsOnboardOpen] = useState(false);
   const [onboardError, setOnboardError] = useState<string | null>(null);
@@ -19,19 +26,34 @@ export default function Settings() {
   const [onboardForm, setOnboardForm] = useState<OnboardRestaurantPayload>({
     userId,
     restaurantGuid: "",
-    restaurantName: "",
-    secretKey: "",
-    clientSecret: "",
-    userAccessType: "",
+    payoutFeePayer: "",
+    payoutFee: "",
+    activationDate: "",
+    freePeriod: "",
+    billingDate: "",
+    billingAmount: "",
     adminName: "",
+    adminPhone: "",
     adminEmail: "",
   });
+  const [onboardingDetails, setOnboardingDetails] = useState<OnboardingDetails | null>(null);
+  const [billingConfig, setBillingConfig] = useState<BillingConfig | null>(null);
+  const [billingConfigStatus, setBillingConfigStatus] = useState<string | null>(null);
+  const [billingConfigError, setBillingConfigError] = useState<string | null>(null);
+  const [isSavingBillingConfig, setIsSavingBillingConfig] = useState(false);
 
   const loadRestaurants = () => {
     return fetchRestaurantRoutingSummary(userId).then((data) => {
       setRestaurants(data);
-      const defaultId = data[0]?.restaurantId ?? null;
-      setSelectedRestaurantId((current) => current ?? defaultId);
+      return data;
+    });
+  };
+
+  const loadRestaurantOptions = () => {
+    return fetchRestaurantDetails(userId).then((data) => {
+      setRestaurantOptions(data);
+      const defaultGuid = data[0]?.restaurantGuid ?? "";
+      setSelectedRestaurantGuid((current) => current || defaultGuid);
       return data;
     });
   };
@@ -41,18 +63,37 @@ export default function Settings() {
       setErrorMessage("Missing user context.");
       return;
     }
-    loadRestaurants()
+    loadRestaurantOptions().catch((error) => {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to load restaurants.");
+    });
+    loadRestaurants().catch((error) => {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to load restaurants.");
+    });
+    fetchBillingConfig(userId)
+      .then((data) => {
+        setBillingConfig(data);
+      })
       .catch((error) => {
-        setErrorMessage(error instanceof Error ? error.message : "Failed to load restaurants.");
+        setBillingConfigError(
+          error instanceof Error ? error.message : "Failed to load billing config.",
+        );
       });
   }, [userId]);
 
-  const selectedRestaurant = useMemo(() => {
-    if (!selectedRestaurantId) {
+  const selectedRestaurantOption = useMemo(() => {
+    if (!selectedRestaurantGuid) {
       return null;
     }
-    return restaurants.find((row) => row.restaurantId === selectedRestaurantId) ?? null;
-  }, [restaurants, selectedRestaurantId]);
+    return restaurantOptions.find((row) => row.restaurantGuid === selectedRestaurantGuid) ?? null;
+  }, [restaurantOptions, selectedRestaurantGuid]);
+
+  const selectedRestaurantSummary = useMemo(() => {
+    if (!selectedRestaurantGuid) {
+      return null;
+    }
+    return restaurants.find((row) => row.restaurantGuid === selectedRestaurantGuid) ?? null;
+  }, [restaurants, selectedRestaurantGuid]);
+
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-10">
@@ -62,20 +103,64 @@ export default function Settings() {
             <div>
               <h1 className="text-2xl font-semibold text-gray-900">Settings</h1>
               <p className="mt-2 text-sm text-gray-600">
-                Select a restaurant to manage payment routing and review admin ownership.
+                Select a restaurant to review admin ownership.
               </p>
             </div>
             <button
               type="button"
-              onClick={() => {
-                setOnboardForm((prev) => ({ ...prev, userId }));
+              onClick={async () => {
+                const restaurantGuid = selectedRestaurantOption?.restaurantGuid ?? "";
                 setOnboardError(null);
                 setOnboardSuccess(null);
+                setOnboardForm((prev) => ({
+                  ...prev,
+                  userId,
+                  restaurantGuid,
+                }));
                 setIsOnboardOpen(true);
+                if (!restaurantGuid) {
+                  return;
+                }
+                try {
+                  const details = await fetchOnboardingDetails(userId, restaurantGuid);
+                  setOnboardingDetails(details);
+                  if (details) {
+                    setOnboardForm((prev) => ({
+                      ...prev,
+                      payoutFeePayer: details.payoutFeePayer ?? "",
+                      payoutFee: details.payoutFee ?? "",
+                      activationDate: details.activationDate ?? "",
+                      freePeriod: details.freePeriod ?? "",
+                      billingDate: details.billingDate ?? "",
+                      billingAmount: details.billingAmount ?? "",
+                      adminName: details.adminName ?? "",
+                      adminPhone: details.adminPhone ?? "",
+                      adminEmail: details.adminEmail ?? "",
+                    }));
+                  } else {
+                    setOnboardForm((prev) => ({
+                      ...prev,
+                      payoutFeePayer: "",
+                      payoutFee: "",
+                      activationDate: "",
+                      freePeriod: "",
+                      billingDate: "",
+                      billingAmount: "",
+                      adminName: "",
+                      adminPhone: "",
+                      adminEmail: "",
+                    }));
+                  }
+                } catch (error) {
+                  setOnboardError(
+                    error instanceof Error ? error.message : "Failed to load settings.",
+                  );
+                }
               }}
-              className="inline-flex items-center justify-center rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-gray-800"
+              disabled={!selectedRestaurantOption?.restaurantGuid}
+              className="inline-flex items-center justify-center rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Onboard New Restaurant
+              Update Restaurant Settings
             </button>
           </div>
 
@@ -91,13 +176,17 @@ export default function Settings() {
                 Restaurant
               </label>
               <select
-                value={selectedRestaurantId ?? ""}
-                onChange={(event) => setSelectedRestaurantId(Number(event.target.value))}
+                value={selectedRestaurantGuid}
+                onChange={(event) => setSelectedRestaurantGuid(event.target.value)}
                 className="mt-2 w-full rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm text-gray-900 focus:border-gray-400 focus:outline-none"
               >
-                {restaurants.map((restaurant) => (
-                  <option key={restaurant.restaurantId} value={restaurant.restaurantId}>
-                    {restaurant.restaurantName ?? "Unknown Restaurant"} (ID {restaurant.restaurantId})
+                {restaurantOptions.map((restaurant) => (
+                  <option
+                    key={restaurant.restaurantGuid ?? restaurant.restaurantId ?? "unknown"}
+                    value={restaurant.restaurantGuid ?? ""}
+                  >
+                    {restaurant.restaurantName ?? "Unknown Restaurant"}
+                    {restaurant.restaurantId ? ` (ID ${restaurant.restaurantId})` : ""}
                   </option>
                 ))}
               </select>
@@ -108,18 +197,132 @@ export default function Settings() {
                 Admin users
               </div>
               <div className="mt-2 text-sm font-semibold text-gray-900">
-                {selectedRestaurant?.restaurantName ?? "No restaurant selected"}
+                {selectedRestaurantOption?.restaurantName ?? "No restaurant selected"}
               </div>
               <div className="mt-1 text-xs text-gray-600">
-                {selectedRestaurant?.adminUsers ?? "Not assigned"}
+                {selectedRestaurantSummary?.adminUsers ?? "Not assigned"}
               </div>
             </div>
           </div>
         </div>
 
-        {selectedRestaurantId ? (
-          <PaymentRouting restaurantId={selectedRestaurantId} embedded />
-        ) : null}
+        <div className="rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">Stripe Billing</h2>
+              <p className="mt-1 text-sm text-gray-600">
+                Configure the platform billing price and display amount.
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={isSavingBillingConfig}
+              onClick={async () => {
+                if (!billingConfig) {
+                  return;
+                }
+                setIsSavingBillingConfig(true);
+                setBillingConfigStatus(null);
+                setBillingConfigError(null);
+                try {
+                  const updated = await updateBillingConfig({
+                    userId,
+                    stripePriceId: billingConfig.stripePriceId ?? null,
+                    billingAmount: billingConfig.billingAmount ?? null,
+                    billingCurrency: billingConfig.billingCurrency ?? null,
+                  });
+                  setBillingConfig(updated);
+                  setBillingConfigStatus("Billing config saved.");
+                } catch (error) {
+                  setBillingConfigError(
+                    error instanceof Error ? error.message : "Failed to save billing config.",
+                  );
+                } finally {
+                  setIsSavingBillingConfig(false);
+                }
+              }}
+              className="inline-flex items-center justify-center rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Save billing settings
+            </button>
+          </div>
+
+          {billingConfigError ? (
+            <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {billingConfigError}
+            </div>
+          ) : null}
+          {billingConfigStatus ? (
+            <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+              {billingConfigStatus}
+            </div>
+          ) : null}
+
+          <div className="mt-6 grid gap-4 md:grid-cols-3">
+            <div>
+              <label className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                Stripe Price ID
+              </label>
+              <input
+                type="text"
+                value={billingConfig?.stripePriceId ?? ""}
+                onChange={(event) =>
+                  setBillingConfig((prev) => ({
+                    ...(prev ?? {}),
+                    stripePriceId: event.target.value,
+                  }))
+                }
+                placeholder="price_..."
+                className="mt-2 w-full rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm text-gray-900 focus:border-gray-400 focus:outline-none"
+              />
+              <p className="mt-2 text-xs text-gray-500">
+                This price is used for all monthly subscriptions.
+              </p>
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                Monthly Amount (Display)
+              </label>
+              <input
+                type="text"
+                value={billingConfig?.billingAmount ?? ""}
+                onChange={(event) =>
+                  setBillingConfig((prev) => ({
+                    ...(prev ?? {}),
+                    billingAmount: event.target.value,
+                  }))
+                }
+                placeholder="149.00"
+                className="mt-2 w-full rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm text-gray-900 focus:border-gray-400 focus:outline-none"
+              />
+              <p className="mt-2 text-xs text-gray-500">
+                Displayed on the billing page only.
+              </p>
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                Currency
+              </label>
+              <input
+                type="text"
+                value={billingConfig?.billingCurrency ?? "USD"}
+                onChange={(event) =>
+                  setBillingConfig((prev) => ({
+                    ...(prev ?? {}),
+                    billingCurrency: event.target.value.toUpperCase(),
+                  }))
+                }
+                placeholder="USD"
+                className="mt-2 w-full rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm text-gray-900 focus:border-gray-400 focus:outline-none"
+              />
+              <p className="mt-2 text-xs text-gray-500">
+                Used for display formatting.
+              </p>
+            </div>
+          </div>
+        </div>
 
         <div className="rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
           <h2 className="text-lg font-semibold text-gray-900">Global Admin</h2>
@@ -127,38 +330,12 @@ export default function Settings() {
             Details update based on the selected restaurant.
           </p>
           <div className="mt-6 grid gap-4 sm:grid-cols-2">
-            <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
-              <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">
-                Routing Provider
-              </div>
-              <div className="mt-2 text-sm font-semibold text-gray-900">
-                {selectedRestaurant?.provider ?? "stripe"}
-              </div>
-              <div className="mt-1 text-xs text-gray-600">
-                {selectedRestaurant?.locked ? "Locked" : "Not set"}
-              </div>
-            </div>
-            <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
-              <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">
-                Stripe Bank
-              </div>
-              <div className="mt-2 text-sm font-semibold text-gray-900">
-                {selectedRestaurant?.bankName || selectedRestaurant?.bankLast4
-                  ? `${selectedRestaurant?.bankName ?? "Bank"} ${
-                      selectedRestaurant?.bankLast4 ? `•••• ${selectedRestaurant.bankLast4}` : ""
-                    }`
-                  : "Not linked"}
-              </div>
-              <div className="mt-1 text-xs text-gray-600">
-                {selectedRestaurant?.usBankPaymentMethodId ?? "No payment method on file"}
-              </div>
-            </div>
             <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 sm:col-span-2">
               <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">
                 Admin Users
               </div>
               <div className="mt-2 text-sm text-gray-700">
-                {selectedRestaurant?.adminUsers ?? "Not assigned"}
+                {selectedRestaurantSummary?.adminUsers ?? "Not assigned"}
               </div>
             </div>
           </div>
@@ -170,9 +347,9 @@ export default function Settings() {
           <div className="w-full max-w-2xl rounded-2xl bg-white p-8 shadow-xl">
             <div className="flex items-start justify-between">
               <div>
-                <h2 className="text-xl font-semibold text-gray-900">Onboard New Restaurant</h2>
+                <h2 className="text-xl font-semibold text-gray-900">Update Restaurant Settings</h2>
                 <p className="mt-1 text-sm text-gray-600">
-                  Add restaurant credentials and invite the admin user.
+                  Update payout fees and billing details for the selected restaurant.
                 </p>
               </div>
               <button
@@ -184,78 +361,154 @@ export default function Settings() {
               </button>
             </div>
 
-            <div className="mt-6 grid gap-4 sm:grid-cols-2">
-              <label className="text-sm text-gray-700">
-                Restaurant GUID
-                <input
-                  value={onboardForm.restaurantGuid}
-                  onChange={(event) =>
-                    setOnboardForm((prev) => ({ ...prev, restaurantGuid: event.target.value }))
-                  }
-                  className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                />
-              </label>
-              <label className="text-sm text-gray-700">
-                Restaurant Name
-                <input
-                  value={onboardForm.restaurantName ?? ""}
-                  onChange={(event) =>
-                    setOnboardForm((prev) => ({ ...prev, restaurantName: event.target.value }))
-                  }
-                  className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                />
-              </label>
-              <label className="text-sm text-gray-700">
-                Secret Key
-                <input
-                  value={onboardForm.secretKey}
-                  onChange={(event) =>
-                    setOnboardForm((prev) => ({ ...prev, secretKey: event.target.value }))
-                  }
-                  className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                />
-              </label>
-              <label className="text-sm text-gray-700">
-                Client Secret
-                <input
-                  value={onboardForm.clientSecret}
-                  onChange={(event) =>
-                    setOnboardForm((prev) => ({ ...prev, clientSecret: event.target.value }))
-                  }
-                  className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                />
-              </label>
-              <label className="text-sm text-gray-700">
-                User Access Type
-                <input
-                  value={onboardForm.userAccessType}
-                  onChange={(event) =>
-                    setOnboardForm((prev) => ({ ...prev, userAccessType: event.target.value }))
-                  }
-                  className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                />
-              </label>
-              <label className="text-sm text-gray-700">
-                Admin Name
-                <input
-                  value={onboardForm.adminName}
-                  onChange={(event) =>
-                    setOnboardForm((prev) => ({ ...prev, adminName: event.target.value }))
-                  }
-                  className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                />
-              </label>
-              <label className="text-sm text-gray-700 sm:col-span-2">
-                Admin Email
-                <input
-                  type="email"
-                  value={onboardForm.adminEmail}
-                  onChange={(event) =>
-                    setOnboardForm((prev) => ({ ...prev, adminEmail: event.target.value }))
-                  }
-                  className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                />
-              </label>
+            <div className="mt-6 space-y-4">
+              <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm">
+                <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  Restaurant Name
+                </div>
+                <div className="mt-2 text-sm font-semibold text-gray-900">
+                  {selectedRestaurantOption?.restaurantName ?? "Unknown Restaurant"}
+                </div>
+                <div className="mt-1 text-xs text-gray-600">
+                  {selectedRestaurantOption?.restaurantGuid ?? "No restaurant GUID available"}
+                </div>
+              </div>
+              {onboardingDetails ? (
+                <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-2 text-xs text-blue-700">
+                  Loaded saved settings. Update any fields and click save to apply changes.
+                </div>
+              ) : null}
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="text-sm text-gray-700 sm:col-span-2">
+                  <span className="block text-sm text-gray-700">
+                    Who pays payout fee per transaction
+                  </span>
+                  <div className="mt-2 flex flex-wrap gap-4">
+                    <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                      <input
+                        type="radio"
+                        name="payoutFeePayer"
+                        value="restaurant"
+                        checked={onboardForm.payoutFeePayer === "restaurant"}
+                        onChange={(event) =>
+                          setOnboardForm((prev) => ({
+                            ...prev,
+                            payoutFeePayer: event.target.value as "restaurant",
+                          }))
+                        }
+                        className="h-4 w-4"
+                      />
+                      Restaurant
+                    </label>
+                    <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                      <input
+                        type="radio"
+                        name="payoutFeePayer"
+                        value="employees"
+                        checked={onboardForm.payoutFeePayer === "employees"}
+                        onChange={(event) =>
+                          setOnboardForm((prev) => ({
+                            ...prev,
+                            payoutFeePayer: event.target.value as "employees",
+                          }))
+                        }
+                        className="h-4 w-4"
+                      />
+                      Employees
+                    </label>
+                  </div>
+                </div>
+                <label className="text-sm text-gray-700">
+                  Fees
+                  <input
+                    value={onboardForm.payoutFee ?? ""}
+                    onChange={(event) =>
+                      setOnboardForm((prev) => ({ ...prev, payoutFee: event.target.value }))
+                    }
+                    className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="text-sm text-gray-700">
+                  Activation Date
+                  <input
+                    type="date"
+                    value={onboardForm.activationDate ?? ""}
+                    onChange={(event) =>
+                      setOnboardForm((prev) => ({
+                        ...prev,
+                        activationDate: event.target.value,
+                      }))
+                    }
+                    className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="text-sm text-gray-700">
+                  Free Period
+                  <input
+                    value={onboardForm.freePeriod ?? ""}
+                    onChange={(event) =>
+                      setOnboardForm((prev) => ({ ...prev, freePeriod: event.target.value }))
+                    }
+                    className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="text-sm text-gray-700">
+                  Billing Date
+                  <input
+                    type="date"
+                    value={onboardForm.billingDate ?? ""}
+                    onChange={(event) =>
+                      setOnboardForm((prev) => ({
+                        ...prev,
+                        billingDate: event.target.value,
+                      }))
+                    }
+                    className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="text-sm text-gray-700">
+                  Billing Amount
+                  <input
+                    value={onboardForm.billingAmount ?? ""}
+                    onChange={(event) =>
+                      setOnboardForm((prev) => ({ ...prev, billingAmount: event.target.value }))
+                    }
+                    className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="text-sm text-gray-700">
+                  Admin Name
+                  <input
+                    value={onboardForm.adminName ?? ""}
+                    onChange={(event) =>
+                      setOnboardForm((prev) => ({ ...prev, adminName: event.target.value }))
+                    }
+                    className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="text-sm text-gray-700">
+                  Admin Phone
+                  <input
+                    value={onboardForm.adminPhone ?? ""}
+                    onChange={(event) =>
+                      setOnboardForm((prev) => ({ ...prev, adminPhone: event.target.value }))
+                    }
+                    className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="text-sm text-gray-700 sm:col-span-2">
+                  Admin Email
+                  <input
+                    type="email"
+                    value={onboardForm.adminEmail ?? ""}
+                    onChange={(event) =>
+                      setOnboardForm((prev) => ({ ...prev, adminEmail: event.target.value }))
+                    }
+                    className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                  />
+                </label>
+              </div>
             </div>
 
             {onboardError ? (
@@ -287,23 +540,49 @@ export default function Settings() {
                   try {
                     const payload = { ...onboardForm, userId };
                     const response = await onboardRestaurant(payload);
-                    setOnboardSuccess("Restaurant onboarded. Invite email sent.");
+                    setOnboardSuccess("Restaurant settings updated.");
                     setOnboardForm({
                       userId,
                       restaurantGuid: "",
-                      restaurantName: "",
-                      secretKey: "",
-                      clientSecret: "",
-                      userAccessType: "",
+                      payoutFeePayer: "",
+                      payoutFee: "",
+                      activationDate: "",
+                      freePeriod: "",
+                      billingDate: "",
+                      billingAmount: "",
                       adminName: "",
+                      adminPhone: "",
                       adminEmail: "",
                     });
+                    setOnboardingDetails(null);
+                    if (payload.restaurantGuid) {
+                      const details = await fetchOnboardingDetails(
+                        userId,
+                        payload.restaurantGuid,
+                      );
+                      setOnboardingDetails(details);
+                      if (details) {
+                        setOnboardForm((prev) => ({
+                          ...prev,
+                          restaurantGuid: payload.restaurantGuid,
+                          payoutFeePayer: details.payoutFeePayer ?? "",
+                          payoutFee: details.payoutFee ?? "",
+                          activationDate: details.activationDate ?? "",
+                          freePeriod: details.freePeriod ?? "",
+                          billingDate: details.billingDate ?? "",
+                          billingAmount: details.billingAmount ?? "",
+                          adminName: details.adminName ?? "",
+                          adminPhone: details.adminPhone ?? "",
+                          adminEmail: details.adminEmail ?? "",
+                        }));
+                      }
+                    }
                     const data = await loadRestaurants();
                     const newlyCreated = data.find(
                       (row) => row.restaurantId === response.restaurantId,
                     );
-                    if (newlyCreated) {
-                      setSelectedRestaurantId(newlyCreated.restaurantId);
+                    if (newlyCreated?.restaurantGuid) {
+                      setSelectedRestaurantGuid(newlyCreated.restaurantGuid);
                     }
                   } catch (error) {
                     setOnboardError(
@@ -315,7 +594,7 @@ export default function Settings() {
                 }}
                 className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {isOnboardSaving ? "Saving..." : "Save & Send Invite"}
+                {isOnboardSaving ? "Saving..." : "Save Settings"}
               </button>
             </div>
           </div>

@@ -5,10 +5,8 @@ from pydantic import BaseModel
 
 try:
     from Backend.db import _get_cursor, _fetch_restaurant_guid, _fetch_restaurant_key
-    from Backend.payment_routing import _fetch_payment_provider, _is_payment_routing_set
 except ImportError:
     from db import _get_cursor, _fetch_restaurant_guid, _fetch_restaurant_key
-    from payment_routing import _fetch_payment_provider, _is_payment_routing_set
 
 router = APIRouter()
 
@@ -355,7 +353,519 @@ def get_approvals(
             """,
             (restaurant_id, contributor_flag, contributor_flag),
         )
-        rows = cursor.fetchall()
+        job_weighted_rows = cursor.fetchall()
+
+        cursor.execute(
+            """
+            WITH GETALLPAYOUT_SCHEDULE AS (
+                SELECT
+                    PS.PAYOUT_SCHEDULEID,
+                    PS.RESTAURANTID,
+                    PS.NAME AS payout_schedule_name,
+                    PS.START_DAY,
+                    PS.END_DAY,
+                    PS.START_TIME,
+                    PS.END_TIME,
+                    PS.PAYOUT_RULE_ID,
+                    PS.PREPAYOUT_FLAG,
+                    PS.PAYOUTTRIGGER_GRATUITY,
+                    PS.PAYOUTTRIGGER_TIPS
+                FROM GRATLYDB.PAYOUT_SCHEDULE PS
+                WHERE PS.RESTAURANTID = %s
+                  AND PS.PAYOUT_RULE_ID = '2'
+            ),
+            GETPAYOUT_EMPLOYEES_DATA AS (
+                SELECT
+                    GPS.PAYOUT_SCHEDULEID,
+                    GPS.RESTAURANTID,
+                    GPS.payout_schedule_name,
+                    GPS.START_DAY,
+                    GPS.END_DAY,
+                    GPS.START_TIME,
+                    GPS.END_TIME,
+                    GPS.PAYOUT_RULE_ID,
+                    GPS.PREPAYOUT_FLAG,
+                    ST.BUSINESSDATE,
+                    STR_TO_DATE(REPLACE(ST.BUSINESSDATE, '-', ''), '%%Y%%m%%d') AS BUSINESS_DATE_VALUE,
+                    CAST(TIMESTAMP(STR_TO_DATE(REPLACE(ST.BUSINESSDATE, '-', ''), '%%Y%%m%%d'), GPS.START_TIME) AS DATETIME(6))
+                        AS START_DATETIME,
+                    CAST(TIMESTAMP(STR_TO_DATE(REPLACE(ST.BUSINESSDATE, '-', ''), '%%Y%%m%%d'), GPS.END_TIME) AS DATETIME(6))
+                        AS END_DATETIME,
+                    ST.RESTAURANTGUID,
+                    ST.EMPLOYEEGUID,
+                    CONCAT(SE.EMPLOYEEFNAME, ' ', SE.EMPLOYEELNAME) AS EMPLOYEE_NAME,
+                    MIN(ST.JOBID) AS JOBID,
+                    MIN(SJ.JOBTITLE) AS JOBTITLE,
+                    DATE_FORMAT(
+                        MIN(
+                            STR_TO_DATE(
+                                SUBSTRING(REPLACE(ST.INDATE, 'T', ' '), 1, 19),
+                                '%%Y-%%m-%%d %%H:%%i:%%s'
+                            )
+                        ),
+                        '%%l:%%i %%p'
+                    ) AS INDATE,
+                    DATE_FORMAT(
+                        MAX(
+                            STR_TO_DATE(
+                                SUBSTRING(REPLACE(ST.OUTDATE, 'T', ' '), 1, 19),
+                                '%%Y-%%m-%%d %%H:%%i:%%s'
+                            )
+                        ),
+                        '%%l:%%i %%p'
+                    ) AS OUTDATE,
+                    SUM(ST.REGULARHOURS + ST.OVERTIMEHOURS) AS HOURS_WORKED
+                FROM GRATLYDB.SRC_TIMEENTRIES ST
+                JOIN GRATLYDB.SRC_ONBOARDING SO
+                    ON SO.RESTAURANTGUID = ST.RESTAURANTGUID
+                JOIN GETALLPAYOUT_SCHEDULE GPS
+                    ON GPS.RESTAURANTID = SO.RESTAURANTID
+                    AND FIELD(
+                        LEFT(DAYNAME(STR_TO_DATE(REPLACE(ST.BUSINESSDATE, '-', ''), '%%Y%%m%%d')), 3),
+                        'Mon','Tue','Wed','Thu','Fri','Sat','Sun'
+                    ) BETWEEN
+                    FIELD(LEFT(GPS.START_DAY, 3), 'Mon','Tue','Wed','Thu','Fri','Sat','Sun')
+                    AND
+                    FIELD(LEFT(GPS.END_DAY, 3), 'Mon','Tue','Wed','Thu','Fri','Sat','Sun')
+                    AND STR_TO_DATE(
+                        SUBSTRING(REPLACE(ST.INDATE, 'T', ' '), 1, 19),
+                        '%%Y-%%m-%%d %%H:%%i:%%s'
+                    ) BETWEEN
+                        CAST(
+                            TIMESTAMP(
+                                STR_TO_DATE(REPLACE(ST.BUSINESSDATE, '-', ''), '%%Y%%m%%d'),
+                                GPS.START_TIME
+                            ) AS DATETIME(6)
+                        )
+                        AND
+                        CAST(
+                            TIMESTAMP(
+                                STR_TO_DATE(REPLACE(ST.BUSINESSDATE, '-', ''), '%%Y%%m%%d'),
+                                GPS.END_TIME
+                            ) AS DATETIME(6)
+                        )
+                JOIN GRATLYDB.SRC_EMPLOYEES SE
+                    ON SE.EMPLOYEEGUID = ST.EMPLOYEEGUID
+                LEFT JOIN GRATLYDB.SRC_JOBS SJ
+                    ON SJ.JOBGUID = ST.JOBID
+                GROUP BY
+                    GPS.PAYOUT_SCHEDULEID,
+                    GPS.RESTAURANTID,
+                    GPS.payout_schedule_name,
+                    GPS.START_DAY,
+                    GPS.END_DAY,
+                    GPS.START_TIME,
+                    GPS.END_TIME,
+                    GPS.PAYOUT_RULE_ID,
+                    GPS.PREPAYOUT_FLAG,
+                    ST.BUSINESSDATE,
+                    ST.RESTAURANTGUID,
+                    ST.EMPLOYEEGUID,
+                    EMPLOYEE_NAME
+            ),
+            GET_ALL_SALES AS (
+                SELECT
+                    GED.PAYOUT_SCHEDULEID,
+                    GED.RESTAURANTID,
+                    GED.payout_schedule_name,
+                    GED.START_DAY,
+                    GED.END_DAY,
+                    GED.START_TIME,
+                    GED.END_TIME,
+                    GED.START_DATETIME,
+                    GED.END_DATETIME,
+                    GED.PAYOUT_RULE_ID,
+                    GED.PREPAYOUT_FLAG,
+                    GED.BUSINESSDATE,
+                    GED.BUSINESS_DATE_VALUE,
+                    GED.RESTAURANTGUID,
+                    GED.EMPLOYEEGUID,
+                    GED.EMPLOYEE_NAME,
+                    GED.JOBID,
+                    GED.JOBTITLE,
+                    GED.INDATE,
+                    GED.OUTDATE,
+                    GED.HOURS_WORKED,
+                    SUM(COALESCE(SAO.TOTALAMOUNT, 0)) AS TOTAL_SALES,
+                    SUM(COALESCE(SAO.TOTALAMOUNT, 0)) - (
+                        SUM(COALESCE(SAO.TAXAMOUNT, 0))
+                        + SUM(COALESCE(SAO.TIPAMOUNT, 0))
+                        + SUM(COALESCE(SAO.GRATUITYAMOUNT, 0))
+                    ) AS NET_SALES,
+                    SUM(COALESCE(SAO.TIPAMOUNT, 0)) AS TOTAL_TIPS,
+                    SUM(COALESCE(SAO.GRATUITYAMOUNT, 0)) AS TOTAL_GRATUITY,
+                    COUNT(DISTINCT SAO.ORDERGUID) AS ORDER_COUNT
+                FROM GETPAYOUT_EMPLOYEES_DATA GED
+                LEFT JOIN GRATLYDB.SRC_ALLORDERS SAO
+                    ON SAO.RESTAURANTGUID = GED.RESTAURANTGUID
+                    AND SAO.EMPLOYEEGUID = GED.EMPLOYEEGUID
+                    AND (
+                        SAO.VOIDED IS NULL
+                        OR SAO.VOIDED <> '1'
+                    )
+                    AND STR_TO_DATE(
+                        SUBSTRING(REPLACE(SAO.OPENEDDATE, 'T', ' '), 1, 19),
+                        '%%Y-%%m-%%d %%H:%%i:%%s'
+                    ) BETWEEN GED.START_DATETIME AND GED.END_DATETIME
+                GROUP BY
+                    GED.PAYOUT_SCHEDULEID,
+                    GED.RESTAURANTID,
+                    GED.payout_schedule_name,
+                    GED.START_DAY,
+                    GED.END_DAY,
+                    GED.START_TIME,
+                    GED.END_TIME,
+                    GED.START_DATETIME,
+                    GED.END_DATETIME,
+                    GED.PAYOUT_RULE_ID,
+                    GED.PREPAYOUT_FLAG,
+                    GED.BUSINESSDATE,
+                    GED.BUSINESS_DATE_VALUE,
+                    GED.RESTAURANTGUID,
+                    GED.EMPLOYEEGUID,
+                    GED.EMPLOYEE_NAME,
+                    GED.JOBID,
+                    GED.JOBTITLE,
+                    GED.INDATE,
+                    GED.OUTDATE,
+                    GED.HOURS_WORKED
+            ),
+            GET_TOTALS AS (
+                SELECT
+                    PAYOUT_SCHEDULEID,
+                    RESTAURANTID,
+                    BUSINESSDATE,
+                    SUM(TOTAL_TIPS) AS OVERALL_TIPS,
+                    SUM(TOTAL_GRATUITY) AS OVERALL_GRATUITY
+                FROM GET_ALL_SALES
+                GROUP BY PAYOUT_SCHEDULEID, RESTAURANTID, BUSINESSDATE
+            ),
+            EMPLOYEE_COUNTS AS (
+                SELECT
+                    PAYOUT_SCHEDULEID,
+                    RESTAURANTID,
+                    BUSINESSDATE,
+                    COUNT(DISTINCT EMPLOYEEGUID) AS employee_count
+                FROM GET_ALL_SALES
+                GROUP BY PAYOUT_SCHEDULEID, RESTAURANTID, BUSINESSDATE
+            )
+            SELECT
+                GAS.PAYOUT_SCHEDULEID,
+                GAS.RESTAURANTID,
+                GAS.payout_schedule_name,
+                GAS.START_DAY,
+                GAS.END_DAY,
+                GAS.START_TIME,
+                GAS.END_TIME,
+                GAS.START_DATETIME,
+                GAS.END_DATETIME,
+                GAS.PAYOUT_RULE_ID,
+                GAS.PREPAYOUT_FLAG,
+                GAS.BUSINESSDATE,
+                GAS.BUSINESS_DATE_VALUE,
+                GAS.RESTAURANTGUID,
+                GAS.EMPLOYEEGUID,
+                GAS.EMPLOYEE_NAME,
+                GAS.JOBID,
+                GAS.JOBTITLE,
+                GAS.JOBTITLE AS PAYOUT_RECEIVERID,
+                0 AS PAYOUT_PERCENTAGE,
+                GAS.INDATE,
+                GAS.OUTDATE,
+                'No' AS IS_CONTRIBUTOR,
+                GAS.HOURS_WORKED,
+                GAS.TOTAL_SALES,
+                GAS.NET_SALES,
+                GAS.TOTAL_TIPS,
+                GAS.TOTAL_GRATUITY,
+                GAS.ORDER_COUNT,
+                GT.OVERALL_TIPS,
+                GT.OVERALL_GRATUITY,
+                ROUND(
+                    CASE
+                        WHEN EC.employee_count > 0 THEN (GT.OVERALL_TIPS / EC.employee_count)
+                        ELSE 0
+                    END,
+                    2
+                ) AS PAYOUT_TIPS,
+                ROUND(
+                    CASE
+                        WHEN EC.employee_count > 0 THEN (GT.OVERALL_GRATUITY / EC.employee_count)
+                        ELSE 0
+                    END,
+                    2
+                ) AS PAYOUT_GRATUITY
+            FROM GET_ALL_SALES GAS
+            JOIN GET_TOTALS GT
+                ON GT.PAYOUT_SCHEDULEID = GAS.PAYOUT_SCHEDULEID
+                AND GT.RESTAURANTID = GAS.RESTAURANTID
+                AND GT.BUSINESSDATE = GAS.BUSINESSDATE
+            JOIN EMPLOYEE_COUNTS EC
+                ON EC.PAYOUT_SCHEDULEID = GAS.PAYOUT_SCHEDULEID
+                AND EC.RESTAURANTID = GAS.RESTAURANTID
+                AND EC.BUSINESSDATE = GAS.BUSINESSDATE
+            ORDER BY GAS.PAYOUT_SCHEDULEID, GAS.EMPLOYEE_NAME
+            """,
+            (restaurant_id,),
+        )
+        equal_payout_rows = cursor.fetchall()
+
+        cursor.execute(
+            """
+            WITH GETALLPAYOUT_SCHEDULE AS (
+                SELECT
+                    PS.PAYOUT_SCHEDULEID,
+                    PS.RESTAURANTID,
+                    PS.NAME AS payout_schedule_name,
+                    PS.START_DAY,
+                    PS.END_DAY,
+                    PS.START_TIME,
+                    PS.END_TIME,
+                    PS.PAYOUT_RULE_ID,
+                    PS.PREPAYOUT_FLAG,
+                    PS.PAYOUTTRIGGER_GRATUITY,
+                    PS.PAYOUTTRIGGER_TIPS
+                FROM GRATLYDB.PAYOUT_SCHEDULE PS
+                WHERE PS.RESTAURANTID = %s
+                  AND PS.PAYOUT_RULE_ID = '3'
+            ),
+            GETPAYOUT_EMPLOYEES_DATA AS (
+                SELECT
+                    GPS.PAYOUT_SCHEDULEID,
+                    GPS.RESTAURANTID,
+                    GPS.payout_schedule_name,
+                    GPS.START_DAY,
+                    GPS.END_DAY,
+                    GPS.START_TIME,
+                    GPS.END_TIME,
+                    GPS.PAYOUT_RULE_ID,
+                    GPS.PREPAYOUT_FLAG,
+                    ST.BUSINESSDATE,
+                    STR_TO_DATE(REPLACE(ST.BUSINESSDATE, '-', ''), '%%Y%%m%%d') AS BUSINESS_DATE_VALUE,
+                    CAST(TIMESTAMP(STR_TO_DATE(REPLACE(ST.BUSINESSDATE, '-', ''), '%%Y%%m%%d'), GPS.START_TIME) AS DATETIME(6))
+                        AS START_DATETIME,
+                    CAST(TIMESTAMP(STR_TO_DATE(REPLACE(ST.BUSINESSDATE, '-', ''), '%%Y%%m%%d'), GPS.END_TIME) AS DATETIME(6))
+                        AS END_DATETIME,
+                    ST.RESTAURANTGUID,
+                    ST.EMPLOYEEGUID,
+                    CONCAT(SE.EMPLOYEEFNAME, ' ', SE.EMPLOYEELNAME) AS EMPLOYEE_NAME,
+                    MIN(ST.JOBID) AS JOBID,
+                    MIN(SJ.JOBTITLE) AS JOBTITLE,
+                    DATE_FORMAT(
+                        MIN(
+                            STR_TO_DATE(
+                                SUBSTRING(REPLACE(ST.INDATE, 'T', ' '), 1, 19),
+                                '%%Y-%%m-%%d %%H:%%i:%%s'
+                            )
+                        ),
+                        '%%l:%%i %%p'
+                    ) AS INDATE,
+                    DATE_FORMAT(
+                        MAX(
+                            STR_TO_DATE(
+                                SUBSTRING(REPLACE(ST.OUTDATE, 'T', ' '), 1, 19),
+                                '%%Y-%%m-%%d %%H:%%i:%%s'
+                            )
+                        ),
+                        '%%l:%%i %%p'
+                    ) AS OUTDATE,
+                    SUM(ST.REGULARHOURS + ST.OVERTIMEHOURS) AS HOURS_WORKED
+                FROM GRATLYDB.SRC_TIMEENTRIES ST
+                JOIN GRATLYDB.SRC_ONBOARDING SO
+                    ON SO.RESTAURANTGUID = ST.RESTAURANTGUID
+                JOIN GETALLPAYOUT_SCHEDULE GPS
+                    ON GPS.RESTAURANTID = SO.RESTAURANTID
+                    AND FIELD(
+                        LEFT(DAYNAME(STR_TO_DATE(REPLACE(ST.BUSINESSDATE, '-', ''), '%%Y%%m%%d')), 3),
+                        'Mon','Tue','Wed','Thu','Fri','Sat','Sun'
+                    ) BETWEEN
+                    FIELD(LEFT(GPS.START_DAY, 3), 'Mon','Tue','Wed','Thu','Fri','Sat','Sun')
+                    AND
+                    FIELD(LEFT(GPS.END_DAY, 3), 'Mon','Tue','Wed','Thu','Fri','Sat','Sun')
+                    AND STR_TO_DATE(
+                        SUBSTRING(REPLACE(ST.INDATE, 'T', ' '), 1, 19),
+                        '%%Y-%%m-%%d %%H:%%i:%%s'
+                    ) BETWEEN
+                        CAST(
+                            TIMESTAMP(
+                                STR_TO_DATE(REPLACE(ST.BUSINESSDATE, '-', ''), '%%Y%%m%%d'),
+                                GPS.START_TIME
+                            ) AS DATETIME(6)
+                        )
+                        AND
+                        CAST(
+                            TIMESTAMP(
+                                STR_TO_DATE(REPLACE(ST.BUSINESSDATE, '-', ''), '%%Y%%m%%d'),
+                                GPS.END_TIME
+                            ) AS DATETIME(6)
+                        )
+                JOIN GRATLYDB.SRC_EMPLOYEES SE
+                    ON SE.EMPLOYEEGUID = ST.EMPLOYEEGUID
+                LEFT JOIN GRATLYDB.SRC_JOBS SJ
+                    ON SJ.JOBGUID = ST.JOBID
+                GROUP BY
+                    GPS.PAYOUT_SCHEDULEID,
+                    GPS.RESTAURANTID,
+                    GPS.payout_schedule_name,
+                    GPS.START_DAY,
+                    GPS.END_DAY,
+                    GPS.START_TIME,
+                    GPS.END_TIME,
+                    GPS.PAYOUT_RULE_ID,
+                    GPS.PREPAYOUT_FLAG,
+                    ST.BUSINESSDATE,
+                    ST.RESTAURANTGUID,
+                    ST.EMPLOYEEGUID,
+                    EMPLOYEE_NAME
+            ),
+            GET_ALL_SALES AS (
+                SELECT
+                    GED.PAYOUT_SCHEDULEID,
+                    GED.RESTAURANTID,
+                    GED.payout_schedule_name,
+                    GED.START_DAY,
+                    GED.END_DAY,
+                    GED.START_TIME,
+                    GED.END_TIME,
+                    GED.START_DATETIME,
+                    GED.END_DATETIME,
+                    GED.PAYOUT_RULE_ID,
+                    GED.PREPAYOUT_FLAG,
+                    GED.BUSINESSDATE,
+                    GED.BUSINESS_DATE_VALUE,
+                    GED.RESTAURANTGUID,
+                    GED.EMPLOYEEGUID,
+                    GED.EMPLOYEE_NAME,
+                    GED.JOBID,
+                    GED.JOBTITLE,
+                    GED.INDATE,
+                    GED.OUTDATE,
+                    GED.HOURS_WORKED,
+                    SUM(COALESCE(SAO.TOTALAMOUNT, 0)) AS TOTAL_SALES,
+                    SUM(COALESCE(SAO.TOTALAMOUNT, 0)) - (
+                        SUM(COALESCE(SAO.TAXAMOUNT, 0))
+                        + SUM(COALESCE(SAO.TIPAMOUNT, 0))
+                        + SUM(COALESCE(SAO.GRATUITYAMOUNT, 0))
+                    ) AS NET_SALES,
+                    SUM(COALESCE(SAO.TIPAMOUNT, 0)) AS TOTAL_TIPS,
+                    SUM(COALESCE(SAO.GRATUITYAMOUNT, 0)) AS TOTAL_GRATUITY,
+                    COUNT(DISTINCT SAO.ORDERGUID) AS ORDER_COUNT
+                FROM GETPAYOUT_EMPLOYEES_DATA GED
+                LEFT JOIN GRATLYDB.SRC_ALLORDERS SAO
+                    ON SAO.RESTAURANTGUID = GED.RESTAURANTGUID
+                    AND SAO.EMPLOYEEGUID = GED.EMPLOYEEGUID
+                    AND (
+                        SAO.VOIDED IS NULL
+                        OR SAO.VOIDED <> '1'
+                    )
+                    AND STR_TO_DATE(
+                        SUBSTRING(REPLACE(SAO.OPENEDDATE, 'T', ' '), 1, 19),
+                        '%%Y-%%m-%%d %%H:%%i:%%s'
+                    ) BETWEEN GED.START_DATETIME AND GED.END_DATETIME
+                GROUP BY
+                    GED.PAYOUT_SCHEDULEID,
+                    GED.RESTAURANTID,
+                    GED.payout_schedule_name,
+                    GED.START_DAY,
+                    GED.END_DAY,
+                    GED.START_TIME,
+                    GED.END_TIME,
+                    GED.START_DATETIME,
+                    GED.END_DATETIME,
+                    GED.PAYOUT_RULE_ID,
+                    GED.PREPAYOUT_FLAG,
+                    GED.BUSINESSDATE,
+                    GED.BUSINESS_DATE_VALUE,
+                    GED.RESTAURANTGUID,
+                    GED.EMPLOYEEGUID,
+                    GED.EMPLOYEE_NAME,
+                    GED.JOBID,
+                    GED.JOBTITLE,
+                    GED.INDATE,
+                    GED.OUTDATE,
+                    GED.HOURS_WORKED
+            ),
+            GET_TOTALS AS (
+                SELECT
+                    PAYOUT_SCHEDULEID,
+                    RESTAURANTID,
+                    BUSINESSDATE,
+                    SUM(TOTAL_TIPS) AS OVERALL_TIPS,
+                    SUM(TOTAL_GRATUITY) AS OVERALL_GRATUITY
+                FROM GET_ALL_SALES
+                GROUP BY PAYOUT_SCHEDULEID, RESTAURANTID, BUSINESSDATE
+            ),
+            HOUR_TOTALS AS (
+                SELECT
+                    PAYOUT_SCHEDULEID,
+                    RESTAURANTID,
+                    BUSINESSDATE,
+                    SUM(HOURS_WORKED) AS total_hours
+                FROM GET_ALL_SALES
+                GROUP BY PAYOUT_SCHEDULEID, RESTAURANTID, BUSINESSDATE
+            )
+            SELECT
+                GAS.PAYOUT_SCHEDULEID,
+                GAS.RESTAURANTID,
+                GAS.payout_schedule_name,
+                GAS.START_DAY,
+                GAS.END_DAY,
+                GAS.START_TIME,
+                GAS.END_TIME,
+                GAS.START_DATETIME,
+                GAS.END_DATETIME,
+                GAS.PAYOUT_RULE_ID,
+                GAS.PREPAYOUT_FLAG,
+                GAS.BUSINESSDATE,
+                GAS.BUSINESS_DATE_VALUE,
+                GAS.RESTAURANTGUID,
+                GAS.EMPLOYEEGUID,
+                GAS.EMPLOYEE_NAME,
+                GAS.JOBID,
+                GAS.JOBTITLE,
+                GAS.JOBTITLE AS PAYOUT_RECEIVERID,
+                0 AS PAYOUT_PERCENTAGE,
+                GAS.INDATE,
+                GAS.OUTDATE,
+                'No' AS IS_CONTRIBUTOR,
+                GAS.HOURS_WORKED,
+                GAS.TOTAL_SALES,
+                GAS.NET_SALES,
+                GAS.TOTAL_TIPS,
+                GAS.TOTAL_GRATUITY,
+                GAS.ORDER_COUNT,
+                GT.OVERALL_TIPS,
+                GT.OVERALL_GRATUITY,
+                ROUND(
+                    CASE
+                        WHEN HT.total_hours > 0 THEN (GT.OVERALL_TIPS * (GAS.HOURS_WORKED / HT.total_hours))
+                        ELSE 0
+                    END,
+                    2
+                ) AS PAYOUT_TIPS,
+                ROUND(
+                    CASE
+                        WHEN HT.total_hours > 0 THEN (GT.OVERALL_GRATUITY * (GAS.HOURS_WORKED / HT.total_hours))
+                        ELSE 0
+                    END,
+                    2
+                ) AS PAYOUT_GRATUITY
+            FROM GET_ALL_SALES GAS
+            JOIN GET_TOTALS GT
+                ON GT.PAYOUT_SCHEDULEID = GAS.PAYOUT_SCHEDULEID
+                AND GT.RESTAURANTID = GAS.RESTAURANTID
+                AND GT.BUSINESSDATE = GAS.BUSINESSDATE
+            JOIN HOUR_TOTALS HT
+                ON HT.PAYOUT_SCHEDULEID = GAS.PAYOUT_SCHEDULEID
+                AND HT.RESTAURANTID = GAS.RESTAURANTID
+                AND HT.BUSINESSDATE = GAS.BUSINESSDATE
+            ORDER BY GAS.PAYOUT_SCHEDULEID, GAS.EMPLOYEE_NAME
+            """,
+            (restaurant_id,),
+        )
+        hour_based_rows = cursor.fetchall()
+
+        rows = job_weighted_rows + equal_payout_rows + hour_based_rows
         if not rows:
             return {"schedules": []}
 
@@ -729,6 +1239,9 @@ def get_approvals(
                 schedule["contributors"] = list(
                     schedule_contributors.get(schedule_key, {}).values()
                 )
+                if str(schedule.get("payoutRuleId")) == "2":
+                    schedule["contributorCount"] = 0
+                    schedule["receiverCount"] = len(schedule["contributors"])
 
         schedules = list(schedule_map.values())
         schedules = [schedule for schedule in schedules if not schedule.get("isApproved")]
@@ -775,27 +1288,18 @@ def approve_payout_schedule(payload: ApprovalFinalizePayload):
         )
         cursor.execute(
             """
-            SELECT COALESCE(SUM(PREPAYOUT_VALUE), 0) AS total_prepayout
+            SELECT
+                COALESCE(SUM(CASE WHEN PREPAYOUTOPTION = 0 THEN PREPAYOUT_VALUE ELSE 0 END), 0) AS percentage_total,
+                COALESCE(SUM(CASE WHEN PREPAYOUTOPTION = 1 THEN PREPAYOUT_VALUE ELSE 0 END), 0) AS fixed_total
             FROM GRATLYDB.PREPAYOUT
             WHERE PAYOUT_SCHEDULEID = %s
             """,
             (payload.payoutScheduleId,),
         )
         prepayout_row = cursor.fetchone()
-        total_prepayout = float(prepayout_row["total_prepayout"] or 0)
-
-        cursor.execute(
-            """
-            SELECT COUNT(*) AS payout_user_count
-            FROM GRATLYDB.PAYOUT_APPROVAL_ITEMS
-            WHERE PAYOUT_APPROVALID = %s
-              AND NET_PAYOUT > 0
-            """,
-            (row["approval_id"],),
-        )
-        count_row = cursor.fetchone()
-        payout_user_count = int(count_row["payout_user_count"] or 0)
-        prepayout_per_user = round(total_prepayout / payout_user_count, 2) if payout_user_count > 0 else 0
+        prepayout_percentage = float(prepayout_row["percentage_total"] or 0)
+        prepayout_fixed = float(prepayout_row["fixed_total"] or 0)
+        prepayout_rate = prepayout_percentage / 100 if prepayout_percentage else 0.0
 
         cursor.execute(
             """
@@ -842,11 +1346,11 @@ def approve_payout_schedule(payload: ApprovalFinalizePayload):
                 PAYOUT_TIPS,
                 PAYOUT_GRATUITY,
                 CASE
-                    WHEN %s > 0 AND NET_PAYOUT > 0 THEN ROUND(GREATEST(0, NET_PAYOUT - %s), 2)
+                    WHEN NET_PAYOUT > 0 THEN ROUND(GREATEST(0, NET_PAYOUT - (NET_PAYOUT * %s) - %s), 2)
                     ELSE NET_PAYOUT
                 END AS NET_PAYOUT,
                 CASE
-                    WHEN %s > 0 AND NET_PAYOUT > 0 THEN %s
+                    WHEN NET_PAYOUT > 0 THEN ROUND(LEAST(NET_PAYOUT, (NET_PAYOUT * %s) + %s), 2)
                     ELSE 0
                 END AS PREPAYOUT_DEDUCTION,
                 %s
@@ -854,10 +1358,10 @@ def approve_payout_schedule(payload: ApprovalFinalizePayload):
             WHERE PAYOUT_APPROVALID = %s
             """,
             (
-                prepayout_per_user,
-                prepayout_per_user,
-                prepayout_per_user,
-                prepayout_per_user,
+                prepayout_rate,
+                prepayout_fixed,
+                prepayout_rate,
+                prepayout_fixed,
                 payload.userId,
                 row["approval_id"],
             ),
@@ -866,23 +1370,10 @@ def approve_payout_schedule(payload: ApprovalFinalizePayload):
         debit_result = None
         debit_error = None
         try:
-            if not _is_payment_routing_set(int(payload.restaurantId)):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Payment routing must be set before approving payouts",
-                )
-            payment_provider = _fetch_payment_provider(int(payload.restaurantId))
-            if payment_provider == "astra":
-                try:
-                    from Backend.astra_payments import _create_restaurant_debit_for_settlement
-                except ImportError:
-                    from astra_payments import _create_restaurant_debit_for_settlement
-            else:
-                try:
-                    from Backend.stripe_payments import _create_restaurant_debit_for_settlement
-                except ImportError:
-                    from stripe_payments import _create_restaurant_debit_for_settlement
-
+            try:
+                from Backend.astra_payments import _create_restaurant_debit_for_settlement
+            except ImportError:
+                from astra_payments import _create_restaurant_debit_for_settlement
             debit_result = _create_restaurant_debit_for_settlement(
                 settlement_id=str(row["approval_id"]),
                 restaurant_id=int(payload.restaurantId),

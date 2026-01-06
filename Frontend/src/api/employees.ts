@@ -17,50 +17,21 @@ export type EmployeeWithJob = {
   jobTitle: string | null;
 };
 
-export type StripeConnectedAccount = {
-  accountId: string;
-  created: boolean;
-  chargesEnabled: boolean;
-  payoutsEnabled: boolean;
-  detailsSubmitted: boolean;
-  disabledReason?: string | null;
-  accountDeauthorized?: boolean;
-  businessType?: string | null;
-  capabilities?: Record<string, string> | null;
-  defaultCurrency?: string | null;
-  card?: StripeCardSummary | null;
-};
-
-export type StripeConnectedAccountSummary = {
-  accountId: string | null;
-  chargesEnabled?: boolean;
-  payoutsEnabled?: boolean;
-  detailsSubmitted?: boolean;
-  disabledReason?: string | null;
-  accountDeauthorized?: boolean;
-  businessType?: string | null;
-  capabilities?: Record<string, string> | null;
-  defaultCurrency?: string | null;
-  card?: StripeCardSummary | null;
-};
-
-export type StripeCardSummary = {
-  brand?: string | null;
-  last4?: string | null;
-  expMonth?: number | null;
-  expYear?: number | null;
-  funding?: string | null;
-  country?: string | null;
-};
-
-export type StripeOnboardingLink = {
-  url: string;
-  expiresAt: number | null;
-};
-
-export async function fetchEmployees(): Promise<Employee[]> {
+export async function fetchEmployees(options?: {
+  restaurantId?: number | null;
+  userId?: number | null;
+}): Promise<Employee[]> {
   try {
-    return await api.get<Employee[]>("/employees");
+    const params = new URLSearchParams();
+    if (options?.restaurantId && Number.isFinite(options.restaurantId)) {
+      params.set("restaurant_id", String(options.restaurantId));
+    }
+    if (options?.userId && Number.isFinite(options.userId)) {
+      params.set("user_id", String(options.userId));
+    }
+    const query = params.toString();
+    const url = query ? `/employees?${query}` : "/employees";
+    return await api.get<Employee[]>(url);
   } catch (error) {
     console.warn("Failed to load employees:", error);
     return [];
@@ -84,44 +55,5 @@ export async function fetchActiveEmployeesByJobTitle(
   } catch (error) {
     console.warn("Failed to load active employees by job:", error);
     return [];
-  }
-}
-
-export async function createOrFetchStripeConnectedAccount(
-  employeeGuid: string,
-): Promise<StripeConnectedAccount | null> {
-  try {
-    return await api.post<StripeConnectedAccount>(
-      `/employees/${employeeGuid}/stripe-connected-account`,
-    );
-  } catch (error) {
-    console.warn("Failed to create or fetch Stripe connected account:", error);
-    return null;
-  }
-}
-
-export async function fetchStripeConnectedAccount(
-  employeeGuid: string,
-): Promise<StripeConnectedAccountSummary | null> {
-  try {
-    return await api.get<StripeConnectedAccountSummary>(
-      `/employees/${employeeGuid}/stripe-connected-account`,
-    );
-  } catch (error) {
-    console.warn("Failed to fetch Stripe connected account:", error);
-    return null;
-  }
-}
-
-export async function createStripeOnboardingLink(
-  employeeGuid: string,
-): Promise<StripeOnboardingLink | null> {
-  try {
-    return await api.post<StripeOnboardingLink>(
-      `/employees/${employeeGuid}/stripe-onboarding-link`,
-    );
-  } catch (error) {
-    console.warn("Failed to create Stripe onboarding link:", error);
-    return null;
   }
 }
