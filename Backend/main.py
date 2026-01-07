@@ -157,6 +157,7 @@ def _get_cors_origins() -> List[str]:
     if raw:
         return [origin.strip() for origin in raw.split(",") if origin.strip()]
     return [
+        "https://dev.gratly.ai",
         "http://localhost:5173",
         "http://localhost:5174",
         "http://127.0.0.1:5173",
