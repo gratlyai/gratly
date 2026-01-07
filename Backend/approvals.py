@@ -865,7 +865,7 @@ def get_approvals(
         )
         hour_based_rows = cursor.fetchall()
 
-        rows = job_weighted_rows + equal_payout_rows + hour_based_rows
+        rows = list(job_weighted_rows) + list(equal_payout_rows) + list(hour_based_rows)
         if not rows:
             return {"schedules": []}
 
