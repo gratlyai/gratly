@@ -66,8 +66,7 @@ def get_weekly_tips_gratuities(user_id: int):
         query = """
             SELECT
                 date_value,
-                COALESCE(SUM(total_tips), 0) AS total_tips,
-                COALESCE(SUM(total_gratuity), 0) AS total_gratuity
+                COALESCE(SUM(total_payout), 0) AS total_payout
             FROM (
                 SELECT
                     COALESCE(
@@ -78,8 +77,7 @@ def get_weekly_tips_gratuities(user_id: int):
                         STR_TO_DATE(BUSINESSDATE, '%%Y%%m%%d'),
                         STR_TO_DATE(LEFT(BUSINESSDATE, 10), '%%Y-%%m-%%d')
                     ) AS date_value,
-                    COALESCE(OVERALL_TIPS, 0) + COALESCE(PAYOUT_TIPS, 0) AS total_tips,
-                    COALESCE(OVERALL_GRATUITY, 0) + COALESCE(PAYOUT_GRATUITY, 0) AS total_gratuity
+                    COALESCE(NET_PAYOUT, 0) AS total_payout
                 FROM GRATLYDB.PAYOUT_FINAL
                 WHERE RESTAURANTID = %s
                   AND BUSINESSDATE IS NOT NULL
@@ -97,10 +95,7 @@ def get_weekly_tips_gratuities(user_id: int):
         cursor.execute(query, params)
         rows = cursor.fetchall()
         totals_by_date = {
-            row["date_value"].strftime("%Y-%m-%d"): {
-                "tips": float(row.get("total_tips") or 0),
-                "gratuity": float(row.get("total_gratuity") or 0),
-            }
+            row["date_value"].strftime("%Y-%m-%d"): float(row.get("total_payout") or 0)
             for row in rows
             if row.get("date_value")
         }
@@ -111,12 +106,12 @@ def get_weekly_tips_gratuities(user_id: int):
         for offset in range(6, -1, -1):
             day_value = date.today() - timedelta(days=offset)
             key = day_value.strftime("%Y-%m-%d")
-            totals = totals_by_date.get(key, {"tips": 0.0, "gratuity": 0.0})
+            total_payout = totals_by_date.get(key, 0.0)
             days.append(
                 {
                     "date": key,
-                    "tips": totals["tips"],
-                    "gratuity": totals["gratuity"],
+                    "tips": total_payout,
+                    "gratuity": 0.0,
                 }
             )
         return {"days": days}

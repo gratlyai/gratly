@@ -1280,12 +1280,16 @@ def get_total_gratuity(user_id: Optional[int] = None):
     cursor = _get_cursor(dictionary=True)
     try:
         employee_guid = None
+        restaurant_guid = None
         if user_id is not None:
             permissions = _fetch_user_permission_flags(user_id)
             if not permissions:
                 raise HTTPException(status_code=404, detail="User permissions not found")
             is_admin = bool(permissions.get("isAdmin"))
             is_employee = bool(permissions.get("isEmployee"))
+            restaurant_guid = _fetch_restaurant_guid(user_id)
+            if not restaurant_guid:
+                raise HTTPException(status_code=404, detail="Restaurant not found")
             if not is_admin:
                 if not is_employee:
                     raise HTTPException(status_code=403, detail="User is not authorized to view totals")
@@ -1293,65 +1297,53 @@ def get_total_gratuity(user_id: Optional[int] = None):
                 if not employee_guid:
                     raise HTTPException(status_code=404, detail="Employee not found for user")
 
-        timeentry_filter = ""
-        timeentry_params: tuple = ()
+        order_conditions = ["(VOIDED IS NULL OR VOIDED <> '1')"]
+        order_params: List[object] = []
+        if restaurant_guid:
+            order_conditions.append("RESTAURANTGUID = %s")
+            order_params.append(restaurant_guid)
         if employee_guid:
-            timeentry_filter = "WHERE EMPLOYEEGUID = %s"
-            timeentry_params = (employee_guid,)
+            order_conditions.append("EMPLOYEEGUID = %s")
+            order_params.append(employee_guid)
+        order_filter = "WHERE " + " AND ".join(order_conditions)
 
         cursor.execute(
             f"""
             SELECT
                 COALESCE(SUM(CASE
-                    WHEN BUSINESSDATE = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
-                    THEN NONCASHGRATUITYSERVICECHARGES
-                    ELSE 0
-                END), 0) AS total_gratuity,
-                COALESCE(SUM(CASE
-                    WHEN BUSINESSDATE = DATE_SUB(CURDATE(), INTERVAL 8 DAY)
-                    THEN NONCASHGRATUITYSERVICECHARGES
-                    ELSE 0
-                END), 0) AS gratuity_change
-            FROM GRATLYDB.SRC_TIMEENTRIES
-            {timeentry_filter}
-            """,
-            timeentry_params,
-        )
-        row = cursor.fetchone() or {}
-        total_gratuity = row.get("total_gratuity") or 0
-        gratuity_change = row.get("gratuity_change") or 0
-
-        order_filter = "WHERE (VOIDED IS NULL OR VOIDED <> '1')"
-        order_params: tuple = ()
-        if employee_guid:
-            order_filter = "WHERE EMPLOYEEGUID = %s AND (VOIDED IS NULL OR VOIDED <> '1')"
-            order_params = (employee_guid,)
-
-        cursor.execute(
-            f"""
-            SELECT
-                COALESCE(SUM(CASE
-                    WHEN BUSINESSDATE = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+                    WHEN BUSINESSDATE = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%%Y%%m%%d')
                     THEN COALESCE(TOTALAMOUNT, 0) - (COALESCE(TAXAMOUNT, 0) + COALESCE(TIPAMOUNT, 0) + COALESCE(GRATUITYAMOUNT, 0))
                     ELSE 0
                 END), 0) AS net_sales,
                 COALESCE(SUM(CASE
-                    WHEN BUSINESSDATE = DATE_SUB(CURDATE(), INTERVAL 8 DAY)
+                    WHEN BUSINESSDATE = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 8 DAY), '%%Y%%m%%d')
                     THEN COALESCE(TOTALAMOUNT, 0) - (COALESCE(TAXAMOUNT, 0) + COALESCE(TIPAMOUNT, 0) + COALESCE(GRATUITYAMOUNT, 0))
                     ELSE 0
                 END), 0) AS net_sales_change
                 ,
                 COALESCE(SUM(CASE
-                    WHEN BUSINESSDATE = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+                    WHEN BUSINESSDATE = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%%Y%%m%%d')
                     THEN COALESCE(TIPAMOUNT, 0)
                     ELSE 0
                 END), 0) AS total_tips
                 ,
                 COALESCE(SUM(CASE
-                    WHEN BUSINESSDATE = DATE_SUB(CURDATE(), INTERVAL 8 DAY)
+                    WHEN BUSINESSDATE = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 8 DAY), '%%Y%%m%%d')
                     THEN COALESCE(TIPAMOUNT, 0)
                     ELSE 0
                 END), 0) AS tips_change
+                ,
+                COALESCE(SUM(CASE
+                    WHEN BUSINESSDATE = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 DAY), '%%Y%%m%%d')
+                    THEN COALESCE(GRATUITYAMOUNT, 0)
+                    ELSE 0
+                END), 0) AS total_gratuity
+                ,
+                COALESCE(SUM(CASE
+                    WHEN BUSINESSDATE = DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 8 DAY), '%%Y%%m%%d')
+                    THEN COALESCE(GRATUITYAMOUNT, 0)
+                    ELSE 0
+                END), 0) AS gratuity_change
             FROM GRATLYDB.SRC_ALLORDERS
             {order_filter}
             """,
@@ -1362,6 +1354,8 @@ def get_total_gratuity(user_id: Optional[int] = None):
         net_sales_change = net_sales_row.get("net_sales_change") or 0
         total_tips = net_sales_row.get("total_tips") or 0
         tips_change = net_sales_row.get("tips_change") or 0
+        total_gratuity = net_sales_row.get("total_gratuity") or 0
+        gratuity_change = net_sales_row.get("gratuity_change") or 0
         return {
             "totalGratuity": float(total_gratuity),
             "gratuityChange": float(gratuity_change),
