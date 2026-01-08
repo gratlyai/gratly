@@ -353,7 +353,7 @@ def get_approvals(
             """,
             (restaurant_id, contributor_flag, contributor_flag),
         )
-        job_weighted_rows = cursor.fetchall()
+        job_weighted_rows = list(cursor.fetchall())
 
         cursor.execute(
             """
@@ -608,7 +608,7 @@ def get_approvals(
             """,
             (restaurant_id,),
         )
-        equal_payout_rows = cursor.fetchall()
+        equal_payout_rows = list(cursor.fetchall())
 
         cursor.execute(
             """
@@ -863,9 +863,9 @@ def get_approvals(
             """,
             (restaurant_id,),
         )
-        hour_based_rows = cursor.fetchall()
+        hour_based_rows = list(cursor.fetchall())
 
-        rows = list(job_weighted_rows) + list(equal_payout_rows) + list(hour_based_rows)
+        rows = job_weighted_rows + equal_payout_rows + hour_based_rows
         if not rows:
             return {"schedules": []}
 
