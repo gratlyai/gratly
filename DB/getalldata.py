@@ -478,7 +478,7 @@ def main(days_back: Optional[int] = None):
                    if not data:
                        log(f"No orders returned for {headers_init} (businessDate {business_date})")
                        continue
-
+                    
                    all_orders_sql_data = []
 
                    # SQL query to insert data
@@ -565,7 +565,8 @@ def main(days_back: Optional[int] = None):
                            appsvccharges = check.get("appliedServiceCharges") or {}
                            if appsvccharges:
                                appsvccharge = appsvccharges[0]
-                               gratuityamount = appsvccharge.get("chargeAmount", "")
+                               if appsvccharges[0].get("name") == "Large Party":
+                                gratuityamount = appsvccharge.get("chargeAmount", "")
 
                            if paymentStatus != "OPEN":
                                orderPaidDate = convert_utc_pacific(record.get("paidDate"))
