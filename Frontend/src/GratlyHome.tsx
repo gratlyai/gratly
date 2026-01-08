@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { api } from './api/client';
 import { fetchRecentSettlements } from './api/payments';
 import { fetchPendingPayouts, fetchWeeklyTipsGratuities } from './api/reports';
+import iconNetSales from './assets/icon-net-sales.svg';
 
 interface WidgetData {
   netSales: number;
@@ -20,23 +21,6 @@ interface WidgetData {
   }>;
   weeklyTipsGratuities: Array<{ day: string; date: string; tips: number; gratuity: number }>;
 }
-
-const IconNetSales = () => (
-  <svg
-    className="h-5 w-5 text-gray-700"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.8"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-  >
-    <rect x="3" y="6" width="18" height="12" rx="2" />
-    <circle cx="12" cy="12" r="3.5" />
-    <path d="M12 9.5v5" />
-  </svg>
-);
 
 const IconTips = () => (
   <svg
@@ -341,6 +325,8 @@ const GratlyHomeDashboard: React.FC = () => {
     return change >= 0 ? '↑' : '↓';
   };
 
+  const earnedColor = '#e6d7b8';
+  const paidColor = '#cab99a';
   const maxRevenue = Math.max(
     ...widgetData.weeklyTipsGratuities.map((d) => d.tips + d.gratuity),
     0,
@@ -385,10 +371,10 @@ const GratlyHomeDashboard: React.FC = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
           {/* Widget 1: Net Sales */}
           <div className="bg-white rounded-xl shadow-md p-6 border border-gray-200 hover:shadow-lg transition-shadow">
-            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center justify-between mb-2">
               <h3 className="text-sm font-medium text-gray-600">Net Sales</h3>
-              <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
-                <IconNetSales />
+              <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#e6d7b8' }}>
+                <img src={iconNetSales} alt="" className="h-5 w-5 text-gray-700" aria-hidden="true" />
               </div>
             </div>
             <div className="mb-2">
@@ -409,7 +395,7 @@ const GratlyHomeDashboard: React.FC = () => {
                 <h3 className="text-sm font-medium text-gray-600">Total Tips</h3>
                 <IconInfo label="Includes tips made only by employees. Excludes tips from third party sources." />
               </div>
-              <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
+              <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#e6d7b8' }}>
                 <IconTips />
               </div>
             </div>
@@ -431,7 +417,7 @@ const GratlyHomeDashboard: React.FC = () => {
                 <h3 className="text-sm font-medium text-gray-600">Total Gratuity</h3>
                 <IconInfo label="Includes gratuity made only by employees. Excludes gratuity from third party sources." />
               </div>
-              <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
+              <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#e6d7b8' }}>
                 <IconGratuity />
               </div>
             </div>
@@ -450,7 +436,7 @@ const GratlyHomeDashboard: React.FC = () => {
           <div className="bg-white rounded-xl shadow-md p-6 border border-gray-200 hover:shadow-lg transition-shadow">
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-sm font-medium text-gray-600">Pending Payouts</h3>
-              <div className="w-10 h-10 bg-orange-100 rounded-lg flex items-center justify-center">
+              <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#e6d7b8' }}>
                 <IconPending />
               </div>
             </div>
@@ -470,17 +456,17 @@ const GratlyHomeDashboard: React.FC = () => {
                 <p className="text-sm text-gray-600">Last 7 days performance</p>
               </div>
               <div className="flex flex-col items-end gap-3">
-                <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
+                <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#e6d7b8' }}>
                   <IconRevenue />
                 </div>
                 <div className="flex items-center gap-4 text-xs font-medium text-gray-600">
                   <span className="flex items-center gap-2">
-                    <span className="h-2.5 w-2.5 rounded-full bg-[#cab99a]" />
-                    Tips
+                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: earnedColor }} />
+                    Earned
                   </span>
                   <span className="flex items-center gap-2">
-                    <span className="h-2.5 w-2.5 rounded-full bg-[#e6d7b8]" />
-                    Gratuity
+                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: paidColor }} />
+                    Paid
                   </span>
                 </div>
               </div>
@@ -511,8 +497,7 @@ const GratlyHomeDashboard: React.FC = () => {
                       0,
                       Math.min(1, revenueRange === 0 ? 0 : (total - revenueMin) / revenueRange),
                     );
-                    const tipsHeight = total > 0 ? Math.round((item.tips / total) * 100) : 0;
-                    const gratuityHeight = 100 - tipsHeight;
+                    const barColor = earnedColor;
                     return (
                       <div key={item.date} className="flex-1 flex items-end h-full">
                         <div
@@ -521,14 +506,9 @@ const GratlyHomeDashboard: React.FC = () => {
                           title={`${item.day}: ${formatCurrency(total)}`}
                         >
                           <div
-                            className="w-full bg-[#cab99a]"
-                            style={{ height: `${tipsHeight}%` }}
-                            title={`Tips: ${formatCurrency(item.tips)}`}
-                          />
-                          <div
-                            className="w-full bg-[#e6d7b8]"
-                            style={{ height: `${gratuityHeight}%` }}
-                            title={`Gratuity: ${formatCurrency(item.gratuity)}`}
+                            className="h-full w-full"
+                            style={{ backgroundColor: barColor }}
+                            title={`Tips & Gratuity: ${formatCurrency(total)}`}
                           />
                         </div>
                       </div>
@@ -554,7 +534,7 @@ const GratlyHomeDashboard: React.FC = () => {
                 <h3 className="text-lg font-bold text-gray-900">Recent Transactions</h3>
                 <p className="text-sm text-gray-600">Latest payout settlements</p>
               </div>
-              <div className="w-10 h-10 bg-teal-100 rounded-lg flex items-center justify-center">
+              <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#e6d7b8' }}>
                 <IconTransactions />
               </div>
             </div>
