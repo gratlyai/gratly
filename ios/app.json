@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "Gratly",
+    "slug": "gratly-mobile",
+    "version": "1.0.1",
+    "orientation": "portrait",
+    "scheme": "gratly",
+    "userInterfaceStyle": "light",
+    "jsEngine": "hermes",
+    "ios": {
+      "buildNumber": "2",
+      "supportsTablet": true,
+      "bundleIdentifier": "com.gratly.mobile",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "Allow Gratly to connect to local development servers on your network."
+      }
+    },
+    "android": {
+      "package": "com.gratly.mobile"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "b3d84c57-e64e-4059-b131-a1425b463738"
+      }
+    },
+    "owner": "gratly"
+  }
+}
