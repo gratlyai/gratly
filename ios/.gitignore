@@ -1,0 +1,13 @@
+node_modules/
+.expo/
+.expo-shared/
+web-build/
+*.log
+.env
+ios/Pods/
+ios/build/
+ios/DerivedData/
+ios/.xcode.env.local
+ios/*.xcworkspace/xcuserdata/
+ios/*.xcodeproj/xcuserdata/
+ios/
