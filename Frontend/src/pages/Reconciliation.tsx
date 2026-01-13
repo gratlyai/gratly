@@ -9,7 +9,6 @@ import {
 } from "../api/approvals";
 import { fetchActiveEmployeesByJobTitle, type EmployeeWithJob } from "../api/employees";
 import { fetchJobTitles } from "../api/jobs";
-import { createRestaurantDebit } from "../api/payments";
 
 type CustomReceiverEntry = {
   id: string;
@@ -477,6 +476,20 @@ export default function Reconciliation() {
         </label>
       </div>
 
+      <div className="mb-6 rounded-lg border border-blue-200 bg-blue-50 p-4">
+        <div className="flex items-start gap-3">
+          <svg className="h-5 w-5 text-blue-600 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+          </svg>
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold text-blue-900">Payout Processing</h3>
+            <p className="mt-1 text-sm text-blue-700">
+              Approved payouts are queued for processing. Restaurant debits and employee payouts run automatically during nightly batch jobs.
+            </p>
+          </div>
+        </div>
+      </div>
+
       <div className="space-y-4">
         {isLoading ? (
           <div className="rounded-xl border border-gray-200 bg-white p-6 text-sm text-gray-500 shadow-sm">
@@ -579,17 +592,6 @@ export default function Reconciliation() {
                             businessDate: schedule.businessDate,
                             userId,
                           });
-                          if (approvalResponse?.approval_id && !approvalResponse.already_approved) {
-                            try {
-                              await createRestaurantDebit({
-                                settlementId: String(approvalResponse.approval_id),
-                                restaurantId,
-                                businessDate: schedule.businessDate,
-                              });
-                            } catch (error) {
-                              console.warn("Failed to debit restaurant for approved payout:", error);
-                            }
-                          }
                           if (approvalResponse?.success) {
                             setSchedules((current) =>
                               current.filter(

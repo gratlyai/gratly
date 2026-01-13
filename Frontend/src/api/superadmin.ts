@@ -71,21 +71,3 @@ export async function onboardRestaurant(
 ): Promise<OnboardRestaurantResponse> {
   return api.post<OnboardRestaurantResponse>("/superadmin/onboard-restaurant", payload);
 }
-
-export type BillingConfig = {
-  stripePriceId?: string | null;
-  billingAmount?: string | null;
-  billingCurrency?: string | null;
-};
-
-export async function fetchBillingConfig(userId: number): Promise<BillingConfig> {
-  return api.get<BillingConfig>(`/superadmin/billing-config?user_id=${userId}`);
-}
-
-export type UpdateBillingConfigPayload = BillingConfig & { userId: number };
-
-export async function updateBillingConfig(
-  payload: UpdateBillingConfigPayload,
-): Promise<BillingConfig> {
-  return api.put<BillingConfig>("/superadmin/billing-config", payload);
-}

@@ -2,24 +2,19 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams } from "react-router-dom";
 import { fetchUserProfile, updateUserProfile } from "./api/users";
 import {
-  API_BASE_URL,
-} from "./api/client";
-import {
   fetchEmployeeConnection,
-  fetchEmployeePayoutMethods,
+  fetchEmployeePaymentMethods,
   fetchRestaurantConnection,
-  fetchRestaurantPayoutMethods,
-  setEmployeePreferredPayoutMethod,
-  setRestaurantPreferredPayoutMethod,
-  startEmployeeCardsConnect,
-  startEmployeeConnect,
-  startRestaurantCardsConnect,
-  startRestaurantConnect,
-  syncEmployeePayoutMethods,
-  syncRestaurantPayoutMethods,
-  type AstraConnection,
-  type AstraPayoutMethod,
-} from "./api/astra";
+  fetchRestaurantPaymentMethods,
+  refreshEmployeePaymentMethods,
+  refreshRestaurantPaymentMethods,
+  setEmployeePreferredPaymentMethod,
+  setRestaurantPreferredPaymentMethod,
+  startEmployeeOnboarding,
+  startRestaurantOnboarding,
+  type MoovConnection,
+  type MoovPaymentMethod,
+} from "./api/moov";
 import {
   getStoredPermissions,
   permissionConfig,
@@ -27,7 +22,6 @@ import {
   type PermissionState,
 } from "./auth/permissions";
 import { fetchPermissionCatalog } from "./api/permissions";
-import { useLocation } from "react-router-dom";
 
 interface UserProfile {
   firstName: string;
@@ -72,18 +66,6 @@ const GratlyProfilePage: React.FC = () => {
   const [showSavedToast, setShowSavedToast] = useState<boolean>(false);
   const [saveError, setSaveError] = useState<string>("");
   const [isSaving, setIsSaving] = useState<boolean>(false);
-  const [astraRestaurantConnection, setAstraRestaurantConnection] = useState<AstraConnection | null>(null);
-  const [astraEmployeeConnection, setAstraEmployeeConnection] = useState<AstraConnection | null>(null);
-  const [astraRestaurantMethods, setAstraRestaurantMethods] = useState<AstraPayoutMethod[]>([]);
-  const [astraEmployeeMethods, setAstraEmployeeMethods] = useState<AstraPayoutMethod[]>([]);
-  const [astraRestaurantError, setAstraRestaurantError] = useState<string>("");
-  const [astraEmployeeError, setAstraEmployeeError] = useState<string>("");
-  const [isConnectingRestaurant, setIsConnectingRestaurant] = useState<boolean>(false);
-  const [isConnectingEmployee, setIsConnectingEmployee] = useState<boolean>(false);
-  const [isSyncingRestaurant, setIsSyncingRestaurant] = useState<boolean>(false);
-  const [isSyncingEmployee, setIsSyncingEmployee] = useState<boolean>(false);
-  const [isAddingRestaurantCard, setIsAddingRestaurantCard] = useState<boolean>(false);
-  const [isAddingEmployeeCard, setIsAddingEmployeeCard] = useState<boolean>(false);
   const restaurantId = restaurantKey ? Number(restaurantKey) : null;
   const storedUserId = localStorage.getItem("userId");
   const userId = storedUserId && Number.isFinite(Number(storedUserId)) ? Number(storedUserId) : null;
@@ -95,12 +77,6 @@ const GratlyProfilePage: React.FC = () => {
       .map((value) => value[0]?.toUpperCase())
       .slice(0, 2)
       .join("") || "U";
-  const formatAstraMethod = (method: AstraPayoutMethod) => {
-    const last4 = method.last4 ? `**** ${method.last4}` : "****";
-    const label = method.label || (method.methodType === "debit_card" ? "Debit card" : "Bank account");
-    const brand = method.brand ? `${method.brand} ` : "";
-    return `${label} (${brand}${last4})`;
-  };
 
   useEffect(() => {
     let isMounted = true;
@@ -154,25 +130,6 @@ const GratlyProfilePage: React.FC = () => {
   useEffect(() => {
     const storedUserId = localStorage.getItem("userId");
     setPermissions(getStoredPermissions(storedUserId));
-  }, []);
-
-  useEffect(() => {
-    const query = new URLSearchParams(window.location.search);
-    const code = query.get("code");
-    const state = query.get("state");
-    if (!code || !state) {
-      return;
-    }
-    const context = localStorage.getItem("astraReturnContext");
-    if (!context) {
-      return;
-    }
-    localStorage.setItem("astraPendingSync", context);
-    localStorage.removeItem("astraReturnContext");
-    const callbackPath =
-      context === "restaurant" ? "/astra/oauth/callback/business" : "/astra/oauth/callback/employee";
-    const callbackUrl = `${API_BASE_URL}${callbackPath}?${new URLSearchParams({ code, state }).toString()}`;
-    window.location.href = callbackUrl;
   }, []);
 
   useEffect(() => {

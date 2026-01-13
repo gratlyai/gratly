@@ -49,7 +49,6 @@ const SettingsScreen = () => {
           <Text style={styles.sectionTitle}>TODO</Text>
           <Text style={styles.todoItem}>• Restaurant selector + admin users summary</Text>
           <Text style={styles.todoItem}>• Update Restaurant Settings modal + onboarding form</Text>
-          <Text style={styles.todoItem}>• Moov billing config (amount, currency)</Text>
           <Text style={styles.todoItem}>• Error/success banners and saving states</Text>
         </View>
 

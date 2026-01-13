@@ -32,7 +32,7 @@ if __package__:
     from .password_reset import router as password_reset_router
     from .approvals import router as approvals_router
     from .reports import router as reports_router
-    from .astra_payments import router as astra_payments_router
+    from .moov_payments import router as moov_payments_router
     from .payment_routing import router as payment_routing_router
     from .billing import router as billing_router
 else:
@@ -59,7 +59,7 @@ else:
     from password_reset import router as password_reset_router
     from approvals import router as approvals_router
     from reports import router as reports_router
-    from astra_payments import router as astra_payments_router
+    from moov_payments import router as moov_payments_router
     from payment_routing import router as payment_routing_router
     from billing import router as billing_router
 
@@ -95,8 +95,8 @@ def _run_sql_script(cursor, script_path: str) -> None:
             try:
                 cursor.execute(stmt)
             except pymysql.err.OperationalError as err:
-                # Ignore already-exists errors for non-idempotent statements.
-                if err.args and err.args[0] in (1050, 1060, 1061):
+                # Ignore already-exists or missing-object errors for idempotent migrations.
+                if err.args and err.args[0] in (1050, 1060, 1061, 1091):
                     continue
                 raise
 
@@ -175,7 +175,7 @@ app.add_middleware(
 
 @app.middleware("http")
 async def apply_request_timezone(request: Request, call_next):
-    if request.url.path == "/api/webhooks/stripe":
+    if request.url.path == "/api/webhooks/moov":
         return await call_next(request)
     timezone_value = None
     restaurant_id = request.query_params.get("restaurant_id") or request.query_params.get("restaurantId")
@@ -239,7 +239,7 @@ app.include_router(payout_schedules_router)
 app.include_router(password_reset_router)
 app.include_router(approvals_router)
 app.include_router(reports_router)
-app.include_router(astra_payments_router)
+app.include_router(moov_payments_router)
 app.include_router(payment_routing_router)
 app.include_router(billing_router)
 
@@ -778,17 +778,6 @@ class ContactPayload(BaseModel):
     phone: Optional[str] = None
     message: str
 
-class BillingConfigResponse(BaseModel):
-    stripePriceId: Optional[str] = None
-    billingAmount: Optional[str] = None
-    billingCurrency: Optional[str] = None
-
-class BillingConfigPayload(BaseModel):
-    userId: int
-    stripePriceId: Optional[str] = None
-    billingAmount: Optional[str] = None
-    billingCurrency: Optional[str] = None
-
 class RestaurantSelectionOption(BaseModel):
     restaurantId: Optional[int] = None
     restaurantGuid: Optional[str] = None
@@ -1195,58 +1184,6 @@ def get_onboarding_details(user_id: int, restaurant_guid: str):
             "adminPhone": row.get("admin_phone"),
             "adminEmail": row.get("admin_email"),
         }
-    finally:
-        cursor.close()
-
-@app.get("/superadmin/billing-config", response_model=BillingConfigResponse)
-def get_billing_config(user_id: int):
-    _require_superadmin_access(user_id)
-    cursor = _get_cursor(dictionary=True)
-    try:
-        cursor.execute(
-            """
-            SELECT CONFIG_KEY AS config_key, CONFIG_VALUE AS config_value
-            FROM GRATLYDB.BILLING_CONFIG
-            WHERE CONFIG_KEY IN ('stripe_price_id', 'billing_amount', 'billing_currency')
-            """
-        )
-        rows = cursor.fetchall()
-        config_map = {row["config_key"]: row["config_value"] for row in rows}
-        return {
-            "stripePriceId": config_map.get("stripe_price_id") or os.getenv("STRIPE_PRICE_ID"),
-            "billingAmount": config_map.get("billing_amount"),
-            "billingCurrency": config_map.get("billing_currency") or "USD",
-        }
-    finally:
-        cursor.close()
-
-@app.put("/superadmin/billing-config", response_model=BillingConfigResponse)
-def update_billing_config(payload: BillingConfigPayload):
-    _require_superadmin_access(payload.userId)
-    cursor = _get_cursor(dictionary=True)
-    conn = cursor.connection
-    try:
-        updates = {
-            "stripe_price_id": payload.stripePriceId,
-            "billing_amount": payload.billingAmount,
-            "billing_currency": payload.billingCurrency,
-        }
-        for key, value in updates.items():
-            if value is None:
-                continue
-            cursor.execute(
-                """
-                INSERT INTO GRATLYDB.BILLING_CONFIG (CONFIG_KEY, CONFIG_VALUE)
-                VALUES (%s, %s)
-                ON DUPLICATE KEY UPDATE CONFIG_VALUE = VALUES(CONFIG_VALUE)
-                """,
-                (key, value),
-            )
-        conn.commit()
-        return get_billing_config(payload.userId)
-    except pymysql.MySQLError as err:
-        conn.rollback()
-        raise HTTPException(status_code=500, detail=f"Error updating billing config: {err}")
     finally:
         cursor.close()
 

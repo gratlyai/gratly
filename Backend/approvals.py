@@ -1281,7 +1281,8 @@ def approve_payout_schedule(payload: ApprovalFinalizePayload):
         cursor.execute(
             """
             UPDATE GRATLYDB.PAYOUT_APPROVAL
-            SET IS_APPROVED = 1
+            SET IS_APPROVED = 1,
+                APPROVED_AT = NOW()
             WHERE PAYOUT_APPROVALID = %s
             """,
             (row["approval_id"],),
@@ -1324,6 +1325,9 @@ def approve_payout_schedule(payload: ApprovalFinalizePayload):
                 PAYOUT_GRATUITY,
                 NET_PAYOUT,
                 PREPAYOUT_DEDUCTION,
+                APPROVED_AT,
+                DEBIT_STATUS,
+                PAYOUT_STATUS,
                 APPROVED_USERID
             )
             SELECT
@@ -1353,6 +1357,9 @@ def approve_payout_schedule(payload: ApprovalFinalizePayload):
                     WHEN NET_PAYOUT > 0 THEN ROUND(LEAST(NET_PAYOUT, (NET_PAYOUT * %s) + %s), 2)
                     ELSE 0
                 END AS PREPAYOUT_DEDUCTION,
+                NOW() AS APPROVED_AT,
+                'not_debited' AS DEBIT_STATUS,
+                'not_paid' AS PAYOUT_STATUS,
                 %s
             FROM GRATLYDB.PAYOUT_APPROVAL_ITEMS
             WHERE PAYOUT_APPROVALID = %s
@@ -1367,27 +1374,11 @@ def approve_payout_schedule(payload: ApprovalFinalizePayload):
             ),
         )
         conn.commit()
-        debit_result = None
-        debit_error = None
-        try:
-            try:
-                from Backend.astra_payments import _create_restaurant_debit_for_settlement
-            except ImportError:
-                from astra_payments import _create_restaurant_debit_for_settlement
-            debit_result = _create_restaurant_debit_for_settlement(
-                settlement_id=str(row["approval_id"]),
-                restaurant_id=int(payload.restaurantId),
-                business_date=payload.businessDate,
-            )
-        except Exception as exc:
-            debit_error = str(exc)
         return {
             "success": True,
             "approval_id": row["approval_id"],
             "is_approved": True,
             "already_approved": False,
-            "debit": debit_result,
-            "debit_error": debit_error,
         }
     except pymysql.MySQLError as err:
         conn.rollback()

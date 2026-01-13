@@ -6,4 +6,3 @@ pymysql
 python-dotenv
 cryptography
 uvicorn
-stripe

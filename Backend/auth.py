@@ -17,7 +17,6 @@ class CurrentUser(BaseModel):
 
 class CurrentBusiness(BaseModel):
     business_id: int
-    stripe_account_id: Optional[str] = None
 
 
 def _parse_user_id(request: Request) -> Optional[int]:
@@ -48,22 +47,7 @@ def get_current_business(current_user: CurrentUser = Depends(get_current_user)) 
     business_id = _fetch_restaurant_key(current_user.user_id)
     if business_id is None:
         raise HTTPException(status_code=404, detail="Business not found for user")
-    cursor = _get_cursor(dictionary=True)
-    try:
-        cursor.execute(
-            """
-            SELECT STRIPE_ACCOUNT_ID AS stripe_account_id
-            FROM GRATLYDB.SRC_ONBOARDING
-            WHERE RESTAURANTID = %s
-            LIMIT 1
-            """,
-            (business_id,),
-        )
-        row = cursor.fetchone()
-        stripe_account_id = row["stripe_account_id"] if row else None
-    finally:
-        cursor.close()
-    return CurrentBusiness(business_id=business_id, stripe_account_id=stripe_account_id)
+    return CurrentBusiness(business_id=business_id)
 
 
 def require_admin(current_user: CurrentUser = Depends(get_current_user)) -> CurrentUser:

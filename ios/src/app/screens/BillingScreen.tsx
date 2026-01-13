@@ -78,7 +78,7 @@ const BillingScreen = () => {
       const { url } = await createBillingPaymentMethodLink(returnUrl);
       await Linking.openURL(url);
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Unable to open Moov payment flow.");
+      setActionError(error instanceof Error ? error.message : "Unable to open payment flow.");
     } finally {
       setIsUpdatingPayment(false);
     }
@@ -122,7 +122,7 @@ const BillingScreen = () => {
             style={[styles.actionButton, isUpdatingPayment && styles.actionButtonDisabled]}
           >
             <Text style={styles.actionButtonText}>
-              {isUpdatingPayment ? "Opening Moov..." : "Update Payment Method"}
+              {isUpdatingPayment ? "Opening..." : "Update Payment Method"}
             </Text>
           </Pressable>
         </View>

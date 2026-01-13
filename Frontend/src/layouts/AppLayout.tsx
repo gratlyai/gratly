@@ -15,7 +15,6 @@ import {
   type RestaurantSelectionOption,
 } from "../api/restaurantSelection";
 import { fetchRestaurantDetails } from "../api/superadmin";
-import { fetchEmployeeConnection } from "../api/astra";
 
 type NavItem = {
   label: string;
@@ -98,9 +97,6 @@ const AppLayout: React.FC = () => {
   const [isRestaurantSaving, setIsRestaurantSaving] = useState<boolean>(false);
   const [restaurantSelectionError, setRestaurantSelectionError] = useState<string | null>(null);
   const showRestaurantSelector = isSuperAdmin || (permissions.adminAccess && !restaurantKey);
-  const [showAstraPrompt, setShowAstraPrompt] = useState<boolean>(false);
-  const [astraPromptLoading, setAstraPromptLoading] = useState<boolean>(false);
-  const [astraPromptMessage, setAstraPromptMessage] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -188,48 +184,6 @@ const AppLayout: React.FC = () => {
       setSelectedRestaurantValue(String(matched.restaurantId));
     }
   }, [restaurantOptions, restaurantKey, selectedRestaurantValue, storedRestaurantKey]);
-
-  useEffect(() => {
-    if (!permissionsLoaded) {
-      return;
-    }
-    if (isSuperAdmin) {
-      setShowAstraPrompt(false);
-      return;
-    }
-    if (isBusinessUser) {
-      setShowAstraPrompt(false);
-      return;
-    }
-    if (!permissions.employeeOnly) {
-      setShowAstraPrompt(false);
-      return;
-    }
-    const numericUserId = Number(activeEmployeeId);
-    if (!Number.isFinite(numericUserId) || numericUserId <= 0) {
-      return;
-    }
-    setAstraPromptLoading(true);
-    setAstraPromptMessage(null);
-    fetchEmployeeConnection(numericUserId)
-      .then((connection) => {
-        const isConnected = Boolean(connection?.connected);
-        const needsPrompt = !isConnected;
-        setShowAstraPrompt(needsPrompt);
-        if (needsPrompt) {
-          setAstraPromptMessage(
-            "You’re almost ready—complete Astra setup and add a debit card to receive instant payouts.",
-          );
-        }
-      })
-      .catch(() => {
-        // If Astra is unavailable, avoid blocking login with a modal.
-        setShowAstraPrompt(false);
-      })
-      .finally(() => {
-        setAstraPromptLoading(false);
-      });
-  }, [activeEmployeeId, permissions, permissionsLoaded]);
 
   const canAccess = (key?: NavItem["permissionKey"]) => {
     if (!key) {
@@ -682,38 +636,6 @@ const AppLayout: React.FC = () => {
           <Outlet key={outletKey} />
         </div>
       </div>
-
-      {showAstraPrompt ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
-            <h2 className="text-lg font-semibold text-gray-900">Complete Astra onboarding</h2>
-            <p className="mt-2 text-sm text-gray-600">
-              {astraPromptMessage ??
-                "Complete your Astra onboarding and add a debit card to get paid tips and gratuities instantly."}
-            </p>
-            <div className="mt-6 flex flex-wrap items-center justify-end gap-3">
-              <button
-                type="button"
-                className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
-                onClick={() => setShowAstraPrompt(false)}
-              >
-                Later
-              </button>
-              <button
-                type="button"
-                disabled={astraPromptLoading}
-                className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
-                onClick={() => {
-                  setShowAstraPrompt(false);
-                  navigate(`${employeeBase}/profile#astra-employee-payouts`);
-                }}
-              >
-                Complete onboarding
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 };
