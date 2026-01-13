@@ -35,6 +35,7 @@ if __package__:
     from .moov_payments import router as moov_payments_router
     from .payment_routing import router as payment_routing_router
     from .billing import router as billing_router
+    from .scheduler import init_scheduler, shutdown_scheduler
 else:
     from security import hash_password, verify_password
     from email_utils import send_sendgrid_email
@@ -62,6 +63,7 @@ else:
     from moov_payments import router as moov_payments_router
     from payment_routing import router as payment_routing_router
     from billing import router as billing_router
+    from scheduler import init_scheduler, shutdown_scheduler
 
 app = FastAPI()
 
@@ -227,13 +229,94 @@ async def apply_request_timezone(request: Request, call_next):
 
 @app.on_event("startup")
 def _run_startup_migrations() -> None:
-    if not _should_run_migrations():
-        return
-    _apply_scripts_sql_once()
+    if _should_run_migrations():
+        _apply_scripts_sql_once()
+    init_scheduler()
+
+@app.on_event("shutdown")
+def _run_shutdown() -> None:
+    shutdown_scheduler()
 
 @app.get("/healthz")
 def healthcheck():
     return {"status": "ok"}
+
+@app.post("/api/admin/jobs/trigger/{job_name}")
+def trigger_job_manually(job_name: str, user_id: int):
+    """Manually trigger a scheduled job (admin only)."""
+    cursor = _get_cursor(dictionary=True)
+    try:
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM GRATLYDB.USER_PERMISSIONS up
+            JOIN GRATLYDB.MSTR_PERMISSIONS mp ON up.PERMISSIONSID = mp.PERMISSIONSID
+            WHERE up.USERID = %s
+              AND LOWER(mp.PERMISSIONSNAME) IN ('superadmin access', 'admin access')
+              AND (mp.DELETED IS NULL OR mp.DELETED = 0)
+            """,
+            (user_id,),
+        )
+        if cursor.fetchone()["count"] == 0:
+            raise HTTPException(status_code=403, detail="Admin access required")
+    finally:
+        cursor.close()
+
+    from moov_jobs import (
+        run_monthly_invoice_job,
+        run_collect_retry_job,
+        run_nightly_debit_job,
+        run_payout_disbursement_job,
+    )
+
+    jobs = {
+        "monthly_invoice": run_monthly_invoice_job,
+        "collect_retry": run_collect_retry_job,
+        "nightly_debit": run_nightly_debit_job,
+        "payout_disbursement": run_payout_disbursement_job,
+    }
+
+    if job_name not in jobs:
+        raise HTTPException(status_code=404, detail=f"Job '{job_name}' not found")
+
+    try:
+        jobs[job_name]()
+        return {"success": True, "job": job_name, "triggered_at": datetime.now(timezone.utc).isoformat()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Job execution failed: {str(e)}")
+
+
+@app.get("/api/admin/jobs/status")
+def get_job_status(user_id: int):
+    """Get status of all scheduled jobs (admin only)."""
+    cursor = _get_cursor(dictionary=True)
+    try:
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM GRATLYDB.USER_PERMISSIONS up
+            JOIN GRATLYDB.MSTR_PERMISSIONS mp ON up.PERMISSIONSID = mp.PERMISSIONSID
+            WHERE up.USERID = %s
+              AND LOWER(mp.PERMISSIONSNAME) IN ('superadmin access', 'admin access')
+              AND (mp.DELETED IS NULL OR mp.DELETED = 0)
+            """,
+            (user_id,),
+        )
+        if cursor.fetchone()["count"] == 0:
+            raise HTTPException(status_code=403, detail="Admin access required")
+    finally:
+        cursor.close()
+
+    from scheduler import scheduler
+
+    jobs = []
+    for job in scheduler.get_jobs():
+        jobs.append({
+            "id": job.id,
+            "name": job.name,
+            "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
+        })
+    return {"jobs": jobs}
 
 app.include_router(payout_schedules_router)
 app.include_router(password_reset_router)

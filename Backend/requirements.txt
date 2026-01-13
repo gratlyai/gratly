@@ -6,3 +6,4 @@ pymysql
 python-dotenv
 cryptography
 uvicorn
+apscheduler==3.10.4
