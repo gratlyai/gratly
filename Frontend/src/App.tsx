@@ -13,6 +13,8 @@ import GratlyShiftPayout from "./GratlyShiftPayout";
 import GratlyProfile from "./GratlyProfile";
 import PasswordReset from "./pages/PasswordReset";
 import PasswordResetForm from "./pages/PasswordResetForm";
+import AdminBilling from "./pages/AdminBilling";
+import MoovOnboarding from "./pages/MoovOnboarding";
 import { PrivateRoute } from "./auth/PrivateRoute";
 import AppLayout from "./layouts/AppLayout";
 import { getStoredPermissions } from "./auth/permissions";
@@ -154,6 +156,22 @@ export default function App() {
             </SuperAdminRoute>
           }
         />
+        <Route
+          path="admin/billing"
+          element={
+            <AdminRoute>
+              <AdminBilling />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="moov/onboarding"
+          element={
+            <PrivateRoute>
+              <MoovOnboarding />
+            </PrivateRoute>
+          }
+        />
         <Route path="profile" element={<GratlyProfile />} />
       </Route>
       <Route
@@ -176,6 +194,14 @@ export default function App() {
             <SuperAdminRoute>
               <Settings />
             </SuperAdminRoute>
+          }
+        />
+        <Route
+          path="moov/onboarding"
+          element={
+            <PrivateRoute>
+              <MoovOnboarding />
+            </PrivateRoute>
           }
         />
         <Route path="profile" element={<GratlyProfile />} />
