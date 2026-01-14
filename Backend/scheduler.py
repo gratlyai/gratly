@@ -6,17 +6,17 @@ from apscheduler.triggers.cron import CronTrigger
 
 try:
     from Backend.moov_jobs import (
-        run_monthly_invoice_job,
-        run_collect_retry_job,
-        run_nightly_debit_job,
-        run_payout_disbursement_job,
+        monthly_invoice_job,
+        monthly_invoice_collect_retry_job,
+        nightly_restaurant_debit_job,
+        payout_disbursement_job,
     )
 except ImportError:
     from moov_jobs import (
-        run_monthly_invoice_job,
-        run_collect_retry_job,
-        run_nightly_debit_job,
-        run_payout_disbursement_job,
+        monthly_invoice_job,
+        monthly_invoice_collect_retry_job,
+        nightly_restaurant_debit_job,
+        payout_disbursement_job,
     )
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ def init_scheduler():
 
     # Monthly invoice generation - 1st of month at 2 AM
     scheduler.add_job(
-        run_monthly_invoice_job,
+        monthly_invoice_job,
         CronTrigger(day=1, hour=2, minute=0),
         id="monthly_invoice",
         name="Generate monthly billing invoices",
@@ -37,7 +37,7 @@ def init_scheduler():
 
     # Collection retry - Daily at 10 AM
     scheduler.add_job(
-        run_collect_retry_job,
+        monthly_invoice_collect_retry_job,
         CronTrigger(hour=10, minute=0),
         id="collect_retry",
         name="Retry failed invoice collections",
@@ -46,7 +46,7 @@ def init_scheduler():
 
     # Nightly restaurant debit - Daily at 3 AM
     scheduler.add_job(
-        run_nightly_debit_job,
+        nightly_restaurant_debit_job,
         CronTrigger(hour=3, minute=0),
         id="nightly_debit",
         name="Process restaurant debits",
@@ -55,7 +55,7 @@ def init_scheduler():
 
     # Payout disbursement - Daily at 4 AM
     scheduler.add_job(
-        run_payout_disbursement_job,
+        payout_disbursement_job,
         CronTrigger(hour=4, minute=0),
         id="payout_disbursement",
         name="Disburse employee payouts",

@@ -71,3 +71,21 @@ export async function onboardRestaurant(
 ): Promise<OnboardRestaurantResponse> {
   return api.post<OnboardRestaurantResponse>("/superadmin/onboard-restaurant", payload);
 }
+
+export type BillingConfig = {
+  userId?: number | null;
+  billingEnabled?: boolean | null;
+  billingAmount?: string | null;
+  billingDate?: number | null;
+};
+
+export async function fetchBillingConfig(userId: number): Promise<BillingConfig | null> {
+  return api.get<BillingConfig | null>(`/superadmin/billing-config?user_id=${userId}`);
+}
+
+export async function updateBillingConfig(
+  userId: number,
+  config: BillingConfig,
+): Promise<{ success: boolean }> {
+  return api.post<{ success: boolean }>("/superadmin/billing-config", { userId, ...config });
+}

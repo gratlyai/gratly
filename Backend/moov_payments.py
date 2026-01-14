@@ -245,48 +245,78 @@ def start_employee_onboarding(user_id: int, payload: MoovOnboardingPayload):
 
 @router.get("/api/restaurants/{restaurant_id}/moov/connection")
 def fetch_restaurant_connection(restaurant_id: int):
-    moov_account_id = ensure_moov_account(
-        "restaurant",
-        restaurant_id,
-        _build_restaurant_account_payload(restaurant_id),
-    )
-    account = fetch_account(moov_account_id)
-    _upsert_moov_account_status(
-        "restaurant",
-        restaurant_id,
-        account.get("status"),
-        account.get("onboardingStatus") or account.get("onboarding_status"),
-        account.get("capabilities"),
-    )
-    return {
-        "connected": True,
-        "moovAccountId": moov_account_id,
-        "onboardingStatus": account.get("onboardingStatus") or account.get("onboarding_status"),
-        "status": account.get("status"),
-    }
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        moov_account_id = ensure_moov_account(
+            "restaurant",
+            restaurant_id,
+            _build_restaurant_account_payload(restaurant_id),
+        )
+        account = fetch_account(moov_account_id)
+        _upsert_moov_account_status(
+            "restaurant",
+            restaurant_id,
+            account.get("status"),
+            account.get("onboardingStatus") or account.get("onboarding_status"),
+            account.get("capabilities"),
+        )
+        return {
+            "connected": True,
+            "moovAccountId": moov_account_id,
+            "onboardingStatus": account.get("onboardingStatus") or account.get("onboarding_status"),
+            "status": account.get("status"),
+        }
+    except Exception as e:
+        logger.error(f"Error in fetch_restaurant_connection: {str(e)}", exc_info=True)
+        # For localhost testing, return mock data if Moov API is unreachable
+        if "nodename nor servname provided" in str(e):
+            logger.warning("Moov API unreachable - returning mock data for testing")
+            return {
+                "connected": False,
+                "moovAccountId": f"mock-restaurant-{restaurant_id}",
+                "onboardingStatus": "pending",
+                "status": "testing_mode"
+            }
+        raise
 
 
 @router.get("/api/employees/{user_id}/moov/connection")
 def fetch_employee_connection(user_id: int):
-    moov_account_id = ensure_moov_account(
-        "employee",
-        user_id,
-        _build_employee_account_payload(user_id),
-    )
-    account = fetch_account(moov_account_id)
-    _upsert_moov_account_status(
-        "employee",
-        user_id,
-        account.get("status"),
-        account.get("onboardingStatus") or account.get("onboarding_status"),
-        account.get("capabilities"),
-    )
-    return {
-        "connected": True,
-        "moovAccountId": moov_account_id,
-        "onboardingStatus": account.get("onboardingStatus") or account.get("onboarding_status"),
-        "status": account.get("status"),
-    }
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        moov_account_id = ensure_moov_account(
+            "employee",
+            user_id,
+            _build_employee_account_payload(user_id),
+        )
+        account = fetch_account(moov_account_id)
+        _upsert_moov_account_status(
+            "employee",
+            user_id,
+            account.get("status"),
+            account.get("onboardingStatus") or account.get("onboarding_status"),
+            account.get("capabilities"),
+        )
+        return {
+            "connected": True,
+            "moovAccountId": moov_account_id,
+            "onboardingStatus": account.get("onboardingStatus") or account.get("onboarding_status"),
+            "status": account.get("status"),
+        }
+    except Exception as e:
+        logger.error(f"Error in fetch_employee_connection: {str(e)}", exc_info=True)
+        # For localhost testing, return mock data if Moov API is unreachable
+        if "nodename nor servname provided" in str(e):
+            logger.warning("Moov API unreachable - returning mock data for testing")
+            return {
+                "connected": False,
+                "moovAccountId": f"mock-employee-{user_id}",
+                "onboardingStatus": "pending",
+                "status": "testing_mode"
+            }
+        raise
 
 
 @router.get("/api/restaurants/{restaurant_id}/moov/payment-methods")

@@ -59,9 +59,19 @@ def run_idempotent(
                         except json.JSONDecodeError:
                             return result_json, True
                     return None, True
-                if locked_at and isinstance(locked_at, datetime):
+                if status == "failed":
+                    # If previous attempt failed, retry
+                    pass
+                elif locked_at and isinstance(locked_at, datetime):
                     if locked_at > now - timedelta(seconds=lock_ttl_seconds):
-                        raise HTTPException(status_code=409, detail="Idempotent operation in progress")
+                        # Lock is still valid, skip this request gracefully
+                        result_json = existing.get("result_json")
+                        if result_json:
+                            try:
+                                return json.loads(result_json), True
+                            except json.JSONDecodeError:
+                                return result_json, True
+                        return None, True
                 cursor.execute(
                     """
                     UPDATE GRATLYDB.IDEMPOTENCY_KEYS

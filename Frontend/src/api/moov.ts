@@ -2,9 +2,13 @@ import { api } from "./client";
 
 export type MoovConnection = {
   connected: boolean;
+  moov_account_id?: string | null;
   moovAccountId?: string | null;
   onboardingStatus?: string | null;
+  onboarding_status?: string | null;
   status?: string | null;
+  kyb_status?: string | null;
+  kyc_status?: string | null;
 };
 
 export type MoovPaymentMethod = {

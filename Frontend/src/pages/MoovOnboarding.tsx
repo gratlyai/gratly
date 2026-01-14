@@ -55,9 +55,11 @@ export default function MoovOnboarding() {
     try {
       setLoading(true);
       setError(null);
-      const result = await startRestaurantOnboarding(restaurantId);
-      if (result.redirect_url) {
-        window.location.href = result.redirect_url;
+      const returnUrl = `${window.location.origin}/gratly-profile?restaurantKey=${restaurantId}`;
+      const refreshUrl = `${window.location.origin}/gratly-profile?restaurantKey=${restaurantId}`;
+      const result = await startRestaurantOnboarding(restaurantId, returnUrl, refreshUrl);
+      if (result.redirectUrl) {
+        window.location.href = result.redirectUrl;
       } else {
         setError("No onboarding URL returned");
       }
@@ -77,9 +79,11 @@ export default function MoovOnboarding() {
     try {
       setLoading(true);
       setError(null);
-      const result = await startEmployeeOnboarding(userId);
-      if (result.redirect_url) {
-        window.location.href = result.redirect_url;
+      const returnUrl = `${window.location.origin}/gratly-profile`;
+      const refreshUrl = `${window.location.origin}/gratly-profile`;
+      const result = await startEmployeeOnboarding(userId, returnUrl, refreshUrl);
+      if (result.redirectUrl) {
+        window.location.href = result.redirectUrl;
       } else {
         setError("No onboarding URL returned");
       }
@@ -163,15 +167,15 @@ export default function MoovOnboarding() {
                     <p className="mt-2 text-sm text-emerald-700">
                       Moov Account ID:{" "}
                       <code className="break-all">
-                        {restaurantConnection.moov_account_id}
+                        {restaurantConnection.moovAccountId || restaurantConnection.moov_account_id}
                       </code>
                     </p>
                     <p className="mt-1 text-sm text-emerald-700">
-                      Status: {restaurantConnection.onboarding_status}
+                      Status: {restaurantConnection.onboardingStatus || restaurantConnection.onboarding_status}
                     </p>
-                    {restaurantConnection.kyb_status && (
+                    {(restaurantConnection.kyb_status || restaurantConnection.status) && (
                       <p className="mt-1 text-sm text-emerald-700">
-                        KYB: {restaurantConnection.kyb_status}
+                        KYB: {restaurantConnection.kyb_status || restaurantConnection.status}
                       </p>
                     )}
                   </div>
@@ -218,15 +222,15 @@ export default function MoovOnboarding() {
                     <p className="mt-2 text-sm text-emerald-700">
                       Moov Account ID:{" "}
                       <code className="break-all">
-                        {employeeConnection.moov_account_id}
+                        {employeeConnection.moovAccountId || employeeConnection.moov_account_id}
                       </code>
                     </p>
                     <p className="mt-1 text-sm text-emerald-700">
-                      Status: {employeeConnection.onboarding_status}
+                      Status: {employeeConnection.onboardingStatus || employeeConnection.onboarding_status}
                     </p>
-                    {employeeConnection.kyc_status && (
+                    {(employeeConnection.kyc_status || employeeConnection.status) && (
                       <p className="mt-1 text-sm text-emerald-700">
-                        KYC: {employeeConnection.kyc_status}
+                        KYC: {employeeConnection.kyc_status || employeeConnection.status}
                       </p>
                     )}
                   </div>

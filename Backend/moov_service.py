@@ -23,7 +23,9 @@ def _get_required_env(key: str) -> str:
 
 
 def _moov_base_url() -> str:
-    return (os.getenv("MOOV_BASE_URL") or "https://api.sandbox.moov.io").rstrip("/")
+    url = (os.getenv("MOOV_BASE_URL") or "https://api.sandbox.moov.io").rstrip("/")
+    print(f"DEBUG: MOOV_BASE_URL = {url}")
+    return url
 
 
 def _moov_auth_header() -> str:
@@ -138,6 +140,12 @@ def ensure_moov_account(owner_type: str, owner_id: int, payload: Dict[str, Any])
         return {"account_id": account_id}
 
     result, _ = run_idempotent("moov_account", f"{owner_type}:{owner_id}", _create)
+    if result is None:
+        # If result is None, fetch from DB instead
+        existing = _fetch_moov_account(owner_type, owner_id)
+        if existing:
+            return existing
+        raise HTTPException(status_code=502, detail="Failed to get or create Moov account")
     return result["account_id"]
 
 

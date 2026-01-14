@@ -1098,6 +1098,7 @@ def get_approvals(
                 WHERE RESTAURANTID = %s
                   AND PAYOUT_SCHEDULEID IN ({", ".join(["%s"] * len(schedule_ids_for_override))})
                   AND BUSINESSDATE IN ({", ".join(["%s"] * len(business_dates_for_override))})
+                  AND IS_APPROVED = 0
                 """,
                 (restaurant_id, *schedule_ids_for_override, *business_dates_for_override),
             )

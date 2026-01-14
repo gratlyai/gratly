@@ -8,6 +8,22 @@ import pymysql
 from pydantic import BaseModel
 from typing import List, Optional, Tuple
 
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    import sys
+    # Find the Backend directory
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    env_path = os.path.join(backend_dir, '.env')
+    if os.path.exists(env_path):
+        load_dotenv(env_path)
+        print(f"Loaded .env from {env_path}")
+        print(f"MOOV_API_KEY is set: {bool(os.getenv('MOOV_API_KEY'))}")
+    else:
+        print(f"Warning: .env file not found at {env_path}")
+except ImportError:
+    pass
+
 if __package__:
     from .security import hash_password, verify_password
     from .email_utils import send_sendgrid_email
@@ -263,17 +279,17 @@ def trigger_job_manually(job_name: str, user_id: int):
         cursor.close()
 
     from moov_jobs import (
-        run_monthly_invoice_job,
-        run_collect_retry_job,
-        run_nightly_debit_job,
-        run_payout_disbursement_job,
+        monthly_invoice_job,
+        monthly_invoice_collect_retry_job,
+        nightly_restaurant_debit_job,
+        payout_disbursement_job,
     )
 
     jobs = {
-        "monthly_invoice": run_monthly_invoice_job,
-        "collect_retry": run_collect_retry_job,
-        "nightly_debit": run_nightly_debit_job,
-        "payout_disbursement": run_payout_disbursement_job,
+        "monthly_invoice": monthly_invoice_job,
+        "collect_retry": monthly_invoice_collect_retry_job,
+        "nightly_debit": nightly_restaurant_debit_job,
+        "payout_disbursement": payout_disbursement_job,
     }
 
     if job_name not in jobs:
