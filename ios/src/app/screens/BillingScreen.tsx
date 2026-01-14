@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import AppShell from "../components/AppShell";
+import { useSessionScope } from "../hooks/useSessionScope";
 import {
   createBillingPaymentMethodLink,
   fetchBillingSummary,
   fetchInvoices,
   type BillingSummary,
-  type InvoiceRecord,
+  type MonthlyInvoice,
 } from "../../core/api/billing";
 
 const fontFamily = Platform.select({ ios: "SF Pro Text", android: "Roboto" }) ?? "System";
@@ -30,52 +31,62 @@ const formatCurrency = (amountCents: number | null | undefined, currency?: strin
   return `${(amountCents / 100).toFixed(2)} ${normalized}`;
 };
 
-const formatPaymentMethod = (method: BillingSummary["paymentMethod"]) => {
-  if (!method) {
+const formatPaymentMethod = (methods: any[]) => {
+  if (!methods || methods.length === 0) {
     return "No payment method on file";
   }
+  const method = methods[0];
   const last4 = method.last4 ? `**** ${method.last4}` : "****";
   const label = method.methodType === "bank_account" ? "Bank account" : "Card";
   return `${label} (${method.brand ?? "•"} ${last4})`;
 };
 
 const BillingScreen = () => {
+  const scope = useSessionScope();
+  const restaurantId = scope?.restaurantId ?? null;
+
   const [summary, setSummary] = useState<BillingSummary | null>(null);
-  const [invoices, setInvoices] = useState<InvoiceRecord[]>([]);
+  const [invoices, setInvoices] = useState<MonthlyInvoice[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [actionError, setActionError] = useState<string | null>(null);
   const [isUpdatingPayment, setIsUpdatingPayment] = useState(false);
 
   useEffect(() => {
+    if (!restaurantId) {
+      setIsLoading(false);
+      return;
+    }
+
     setIsLoading(true);
-    Promise.all([fetchBillingSummary(), fetchInvoices()])
+    Promise.all([fetchBillingSummary(restaurantId), fetchInvoices(restaurantId)])
       .then(([summaryData, invoiceData]) => {
         setSummary(summaryData);
         setInvoices(invoiceData.invoices ?? []);
       })
+      .catch(() => {
+        setActionError("Failed to load billing information");
+      })
       .finally(() => setIsLoading(false));
-  }, []);
+  }, [restaurantId]);
 
   const billingAmount = useMemo(
-    () => formatCurrency(summary?.billingAmountCents ?? null, summary?.billingCurrency ?? "USD"),
-    [summary?.billingAmountCents, summary?.billingCurrency],
+    () => formatCurrency(summary?.config?.billingAmount ?? null, "USD"),
+    [summary?.config?.billingAmount],
   );
   const billingDateLabel = useMemo(() => {
-    if (summary?.billingDate) {
-      return formatDate(summary.billingDate);
-    }
-    if (summary?.billingDayOfMonth) {
-      return `Day ${summary.billingDayOfMonth}`;
+    if (summary?.config?.billingDate) {
+      return `Day ${summary.config.billingDate}`;
     }
     return "—";
-  }, [summary?.billingDate, summary?.billingDayOfMonth]);
+  }, [summary?.config?.billingDate]);
 
   const handleUpdatePayment = async () => {
+    if (!restaurantId) return;
     setIsUpdatingPayment(true);
     setActionError(null);
     try {
       const returnUrl = "gratly://billing?connected=1";
-      const { url } = await createBillingPaymentMethodLink(returnUrl);
+      const { url } = await createBillingPaymentMethodLink(restaurantId, returnUrl);
       await Linking.openURL(url);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Unable to open payment flow.");
@@ -114,7 +125,7 @@ const BillingScreen = () => {
           </View>
           <View style={styles.methodRow}>
             <Text style={styles.infoLabel}>Payment Method</Text>
-            <Text style={styles.infoValue}>{formatPaymentMethod(summary?.paymentMethod ?? null)}</Text>
+            <Text style={styles.infoValue}>{formatPaymentMethod(summary?.paymentMethods ?? [])}</Text>
           </View>
           <Pressable
             onPress={handleUpdatePayment}
@@ -137,9 +148,9 @@ const BillingScreen = () => {
             invoices.map((invoice) => (
               <View key={invoice.id} style={styles.invoiceRow}>
                 <View>
-                  <Text style={styles.invoiceId}>{invoice.invoiceId ?? invoice.billingPeriod}</Text>
+                  <Text style={styles.invoiceId}>{invoice.moovInvoiceId ?? invoice.billingPeriod}</Text>
                   <Text style={styles.invoiceMeta}>
-                    Due {formatDate(invoice.dueDate)} · {invoice.status}
+                    Due {formatDate(invoice.dueDate)} · {invoice.paymentStatus ?? "pending"}
                   </Text>
                 </View>
                 <Text style={styles.invoiceAmount}>
