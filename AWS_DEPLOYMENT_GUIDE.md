@@ -22,14 +22,19 @@ In the App Runner service page:
 2. Scroll down to **Environment variables**
 3. Click **Edit** to add variables
 
-Add these 4 variables:
+Add these 3 variables (from your `.env` file):
 
 | Variable | Value | Where to Get |
 |----------|-------|-------------|
-| `MOOV_CLIENT_ID` | your_sandbox_client_id | https://moov-sandbox.com/settings/api-keys |
-| `MOOV_CLIENT_SECRET` | your_sandbox_client_secret | https://moov-sandbox.com/settings/api-keys |
-| `MOOV_LOCAL_MODE` | `true` | Literal text |
-| `RUN_DB_MIGRATIONS` | `true` | Literal text |
+| `MOOV_BASE_URL` | `https://api.moov.io` (or sandbox URL) | Moov dashboard |
+| `MOOV_API_KEY` | your_api_key | Your `.env` file / Moov credentials |
+| `MOOV_PLATFORM_ACCOUNT_ID` | your_platform_account_id | Your `.env` file / Moov credentials |
+
+Also add for database migrations:
+
+| Variable | Value |
+|----------|-------|
+| `RUN_DB_MIGRATIONS` | `true` |
 
 **Important**: These should already be set from previous deployment. Just verify or update them.
 
@@ -267,14 +272,14 @@ In **App Runner Logs**:
    - Missing dependencies
 5. Redeploy by pushing code again: `git push origin dev`
 
-### OAuth Token Fails ("success": false)
+### API Request Fails (502 error)
 ```bash
 # In App Runner environment variables, verify:
-MOOV_CLIENT_ID=correct_id_from_moov_dashboard
-MOOV_CLIENT_SECRET=correct_secret_from_moov_dashboard
+MOOV_BASE_URL=https://api.moov.io
+MOOV_API_KEY=correct_api_key_from_env
+MOOV_PLATFORM_ACCOUNT_ID=correct_account_id_from_env
 
-# Get new credentials from:
-# https://moov-sandbox.com/settings/api-keys
+# Check your .env file for correct values
 ```
 
 ### Migrations Didn't Run
