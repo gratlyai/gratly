@@ -24,7 +24,19 @@ MOOV_CLIENT_SECRET=your_sandbox_client_secret_here
 
 Save and exit (`Ctrl+O`, `Enter`, `Ctrl+X` in nano).
 
-## Step 3: Start Tunnel (1 min)
+## Step 3: Setup ngrok (if first time)
+
+ngrok requires authentication. Do this **once**:
+
+1. Go to https://dashboard.ngrok.com/signup (free account)
+2. Sign in to https://dashboard.ngrok.com/get-started/your-authtoken
+3. Copy the `ngrok config add-authtoken` command shown there
+4. Run it in terminal:
+   ```bash
+   ngrok config add-authtoken YOUR_TOKEN_HERE
+   ```
+
+## Step 3b: Start Tunnel (1 min)
 
 Open a **new terminal** and run:
 

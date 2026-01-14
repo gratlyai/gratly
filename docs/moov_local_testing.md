@@ -26,6 +26,18 @@ Gratly supports two modes for local Moov testing:
 4. Copy your `Client ID` and `Client Secret`
 5. Create a test account (restaurant or employee) for testing
 
+### Step 1.5: Set Up ngrok (Tunnel Mode Only)
+
+**First time only**: Authenticate ngrok
+
+1. Go to https://dashboard.ngrok.com/signup (free account)
+2. Sign in and go to https://dashboard.ngrok.com/get-started/your-authtoken
+3. Copy the command shown (e.g., `ngrok config add-authtoken 2X1X1X...`)
+4. Run it in your terminal:
+   ```bash
+   ngrok config add-authtoken YOUR_TOKEN_HERE
+   ```
+
 ### Step 2: Set Up Tunnel (Tunnel Mode)
 
 ```bash

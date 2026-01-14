@@ -108,8 +108,23 @@ case $PROVIDER in
             exit 1
         fi
 
+        # Check if ngrok is authenticated
+        print_info "Checking ngrok authentication..."
+        if ! ngrok config validate 2>/dev/null; then
+            print_error "ngrok is not authenticated"
+            echo ""
+            echo "First time setup required:"
+            echo "  1. Sign up for free: https://dashboard.ngrok.com/signup"
+            echo "  2. Get authtoken: https://dashboard.ngrok.com/get-started/your-authtoken"
+            echo "  3. Run: ngrok config add-authtoken YOUR_TOKEN_HERE"
+            echo ""
+            exit 1
+        fi
+        print_success "ngrok is authenticated"
+        echo ""
+
         # Start ngrok
-        echo "Starting ngrok..."
+        print_info "Starting ngrok tunnel on port $PORT..."
         ngrok http $PORT --log=stdout | while IFS= read -r line; do
             # Extract the public URL from ngrok output
             if [[ $line == *"URL"* ]] && [[ $line == *"https://"* ]]; then
