@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, date
 from typing import Any, Dict, List, Optional, Tuple
+import logging
 
 from fastapi import HTTPException
 from zoneinfo import ZoneInfo
+
+logger = logging.getLogger(__name__)
 
 try:
     from Backend.db import _get_cursor, _fetch_restaurant_timezone
@@ -196,7 +199,7 @@ def _send_billing_email(charge_id: int, restaurant_id: int, email_type: str, sub
 
 
 def monthly_invoice_job() -> Dict[str, Any]:
-    print(f"[JOB] monthly_invoice_job started at {datetime.now()}")
+    logger.info(f"[JOB] monthly_invoice_job started at {datetime.now()}")
     results = {"processed": 0, "skipped": 0}
     for row in _fetch_restaurants():
         restaurant_id = row.get("restaurant_id")
@@ -251,12 +254,12 @@ def monthly_invoice_job() -> Dict[str, Any]:
             return {"charge_id": charge_id, "invoice_id": invoice_id}
 
         run_idempotent("monthly_invoice", f"{restaurant_id}:{billing_period}", _create_invoice)
-    print(f"[JOB] monthly_invoice_job completed at {datetime.now()}: {results}")
+    logger.info(f"[JOB] monthly_invoice_job completed at {datetime.now()}: {results}")
     return results
 
 
 def monthly_invoice_collect_retry_job() -> Dict[str, Any]:
-    print(f"[JOB] monthly_invoice_collect_retry_job started at {datetime.now()}")
+    logger.info(f"[JOB] monthly_invoice_collect_retry_job started at {datetime.now()}")
     cursor = _get_cursor(dictionary=True)
     now = datetime.utcnow()
     processed = 0
@@ -295,14 +298,14 @@ def monthly_invoice_collect_retry_job() -> Dict[str, Any]:
                     (now + timedelta(hours=6), row.get("id")),
                 )
         result = {"processed": processed}
-        print(f"[JOB] monthly_invoice_collect_retry_job completed at {datetime.now()}: {result}")
+        logger.info(f"[JOB] monthly_invoice_collect_retry_job completed at {datetime.now()}: {result}")
         return result
     finally:
         cursor.close()
 
 
 def nightly_restaurant_debit_job() -> Dict[str, Any]:
-    print(f"[JOB] nightly_restaurant_debit_job started at {datetime.now()}")
+    logger.info(f"[JOB] nightly_restaurant_debit_job started at {datetime.now()}")
     results = {"batches_created": 0}
     for row in _fetch_restaurants():
         restaurant_id = row.get("restaurant_id")
@@ -427,12 +430,12 @@ def nightly_restaurant_debit_job() -> Dict[str, Any]:
             run_idempotent("nightly_debit", f"{restaurant_id}:{business_date}", _create_batch)
         finally:
             cursor.close()
-    print(f"[JOB] nightly_restaurant_debit_job completed at {datetime.now()}: {results}")
+    logger.info(f"[JOB] nightly_restaurant_debit_job completed at {datetime.now()}: {results}")
     return results
 
 
 def payout_disbursement_job() -> Dict[str, Any]:
-    print(f"[JOB] payout_disbursement_job started at {datetime.now()}")
+    logger.info(f"[JOB] payout_disbursement_job started at {datetime.now()}")
     cursor = _get_cursor(dictionary=True)
     conn = cursor.connection
     processed = 0
@@ -588,7 +591,7 @@ def payout_disbursement_job() -> Dict[str, Any]:
             run_idempotent("payout_item", f"{payout_final_id}", _create_payout)
             processed += 1
         result = {"processed": processed}
-        print(f"[JOB] payout_disbursement_job completed at {datetime.now()}: {result}")
+        logger.info(f"[JOB] payout_disbursement_job completed at {datetime.now()}: {result}")
         return result
     finally:
         cursor.close()

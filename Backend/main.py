@@ -2,11 +2,19 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import os
 import secrets
+import logging
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 import pymysql
 from pydantic import BaseModel
 from typing import List, Optional, Tuple
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] [%(levelname)s] %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
 try:
@@ -247,16 +255,20 @@ async def apply_request_timezone(request: Request, call_next):
 
 @app.on_event("startup")
 def _run_startup_migrations() -> None:
+    logger.info("=== APP STARTUP SEQUENCE STARTED ===")
     if _should_run_migrations():
+        logger.info("Running database migrations...")
         _apply_scripts_sql_once()
+        logger.info("Database migrations completed")
     try:
-        print("[SCHEDULER] Initializing job scheduler...")
+        logger.info("[SCHEDULER] Initializing job scheduler...")
         init_scheduler()
-        print("[SCHEDULER] Job scheduler initialized successfully")
+        logger.info("[SCHEDULER] Job scheduler initialized successfully")
     except Exception as e:
-        print(f"[SCHEDULER ERROR] Failed to initialize scheduler: {e}")
+        logger.error(f"[SCHEDULER ERROR] Failed to initialize scheduler: {e}", exc_info=True)
         import traceback
         traceback.print_exc()
+    logger.info("=== APP STARTUP SEQUENCE COMPLETED ===")
 
 @app.on_event("shutdown")
 def _run_shutdown() -> None:
@@ -264,7 +276,46 @@ def _run_shutdown() -> None:
 
 @app.get("/healthz")
 def healthcheck():
-    return {"status": "ok"}
+    from scheduler import scheduler
+    jobs_info = []
+    try:
+        if scheduler.running:
+            jobs_info = [
+                {
+                    "id": job.id,
+                    "name": job.name,
+                    "next_run_time": str(job.next_run_time),
+                }
+                for job in scheduler.get_jobs()
+            ]
+    except Exception as e:
+        jobs_info = [{"error": str(e)}]
+
+    return {
+        "status": "ok",
+        "scheduler_running": scheduler.running if hasattr(scheduler, 'running') else False,
+        "jobs_count": len(jobs_info),
+        "jobs": jobs_info
+    }
+
+@app.get("/api/admin/jobs/status")
+def jobs_status():
+    """Get current scheduler and jobs status."""
+    from scheduler import scheduler
+
+    return {
+        "scheduler_running": scheduler.running if hasattr(scheduler, 'running') else False,
+        "jobs": [
+            {
+                "id": job.id,
+                "name": job.name,
+                "next_run_time": str(job.next_run_time) if job.next_run_time else None,
+                "trigger": str(job.trigger),
+            }
+            for job in scheduler.get_jobs()
+        ] if scheduler.running else [],
+        "total_jobs": len(scheduler.get_jobs()) if scheduler.running else 0,
+    }
 
 @app.post("/api/admin/jobs/trigger/{job_name}")
 def trigger_job_manually(job_name: str, user_id: int):

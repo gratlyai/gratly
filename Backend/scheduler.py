@@ -25,7 +25,7 @@ scheduler = BackgroundScheduler()
 
 def init_scheduler():
     """Initialize and start the background job scheduler."""
-    print("[SCHEDULER] Starting scheduler initialization...")
+    logger.info("[SCHEDULER] Starting scheduler initialization...")
 
     # Monthly invoice generation - 1st of month at 2 AM
     scheduler.add_job(
@@ -35,7 +35,7 @@ def init_scheduler():
         name="Generate monthly billing invoices",
         replace_existing=True,
     )
-    print("[SCHEDULER] Added job: monthly_invoice")
+    logger.info("[SCHEDULER] Added job: monthly_invoice")
 
     # Collection retry - Daily at 10 AM
     scheduler.add_job(
@@ -45,7 +45,7 @@ def init_scheduler():
         name="Retry failed invoice collections",
         replace_existing=True,
     )
-    print("[SCHEDULER] Added job: collect_retry")
+    logger.info("[SCHEDULER] Added job: collect_retry")
 
     # Nightly restaurant debit - Daily at 3 AM
     scheduler.add_job(
@@ -55,7 +55,7 @@ def init_scheduler():
         name="Process restaurant debits",
         replace_existing=True,
     )
-    print("[SCHEDULER] Added job: nightly_debit")
+    logger.info("[SCHEDULER] Added job: nightly_debit")
 
     # Payout disbursement - Daily at 4 AM
     scheduler.add_job(
@@ -65,11 +65,10 @@ def init_scheduler():
         name="Disburse employee payouts",
         replace_existing=True,
     )
-    print("[SCHEDULER] Added job: payout_disbursement")
+    logger.info("[SCHEDULER] Added job: payout_disbursement")
 
     scheduler.start()
-    logger.info("Job scheduler started successfully with 4 automated jobs")
-    print("[SCHEDULER] Job scheduler started successfully with 4 automated jobs")
+    logger.info("[SCHEDULER] Job scheduler started successfully with 4 automated jobs")
 
 
 def shutdown_scheduler():
