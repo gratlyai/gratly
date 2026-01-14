@@ -1,18 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { fetchUserProfile, updateUserProfile } from "./api/users";
 import {
-  fetchEmployeeConnection,
   fetchEmployeePaymentMethods,
-  fetchRestaurantConnection,
-  fetchRestaurantPaymentMethods,
   refreshEmployeePaymentMethods,
-  refreshRestaurantPaymentMethods,
   setEmployeePreferredPaymentMethod,
-  setRestaurantPreferredPaymentMethod,
-  startEmployeeOnboarding,
-  startRestaurantOnboarding,
-  type MoovConnection,
   type MoovPaymentMethod,
 } from "./api/moov";
 import {
@@ -75,10 +67,8 @@ const GratlyProfilePage: React.FC = () => {
   const [isOnboarding, setIsOnboarding] = useState(false);
   const [isRefreshingMethods, setIsRefreshingMethods] = useState(false);
 
-  const restaurantId = restaurantKey ? Number(restaurantKey) : null;
   const storedUserId = localStorage.getItem("userId");
   const userId = storedUserId && Number.isFinite(Number(storedUserId)) ? Number(storedUserId) : null;
-  const isAdminUser = permissions.adminAccess || permissions.superadminAccess;
   const initials =
     [profile.firstName, profile.lastName]
       .map((value) => value.trim())

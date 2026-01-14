@@ -62,15 +62,6 @@ export default function Settings() {
     loadRestaurants().catch((error) => {
       setErrorMessage(error instanceof Error ? error.message : "Failed to load restaurants.");
     });
-    fetchBillingConfig(userId)
-      .then((data) => {
-        setBillingConfig(data);
-      })
-      .catch((error) => {
-        setBillingConfigError(
-          error instanceof Error ? error.message : "Failed to load billing config.",
-        );
-      });
   }, [userId]);
 
   const selectedRestaurantOption = useMemo(() => {

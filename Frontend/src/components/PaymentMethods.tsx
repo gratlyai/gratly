@@ -35,7 +35,7 @@ export default function PaymentMethods({
         const result = isRestaurant
           ? await fetchRestaurantPaymentMethods(ownerId)
           : await fetchEmployeePaymentMethods(ownerId);
-        setMethods(result || []);
+        setMethods(Array.isArray(result) ? result : result?.methods || []);
       } catch (err) {
         setError(
           err instanceof Error ? err.message : "Failed to load payment methods"
@@ -60,7 +60,7 @@ export default function PaymentMethods({
       const result = isRestaurant
         ? await fetchRestaurantPaymentMethods(ownerId)
         : await fetchEmployeePaymentMethods(ownerId);
-      setMethods(result || []);
+      setMethods(Array.isArray(result) ? result : result?.methods || []);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Failed to refresh payment methods"
