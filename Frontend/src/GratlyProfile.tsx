@@ -5,6 +5,7 @@ import {
   fetchEmployeePaymentMethods,
   refreshEmployeePaymentMethods,
   setEmployeePreferredPaymentMethod,
+  startEmployeeOnboarding,
   type MoovPaymentMethod,
 } from "./api/moov";
 import {
@@ -61,7 +62,6 @@ const GratlyProfilePage: React.FC = () => {
 
   // Employee payment methods
   const [employeePaymentMethods, setEmployeePaymentMethods] = useState<MoovPaymentMethod[]>([]);
-  const [employeeConnection, setEmployeeConnection] = useState<MoovConnection | null>(null);
   const [isLoadingEmployeeData, setIsLoadingEmployeeData] = useState(false);
   const [employeeError, setEmployeeError] = useState<string>("");
   const [isOnboarding, setIsOnboarding] = useState(false);
@@ -155,12 +155,8 @@ const GratlyProfilePage: React.FC = () => {
       try {
         setIsLoadingEmployeeData(true);
         setEmployeeError("");
-        const [methods, connection] = await Promise.all([
-          fetchEmployeePaymentMethods(userId),
-          fetchEmployeeConnection(userId),
-        ]);
-        setEmployeePaymentMethods(methods);
-        setEmployeeConnection(connection);
+        const methods = await fetchEmployeePaymentMethods(userId);
+        setEmployeePaymentMethods(Array.isArray(methods) ? methods : methods?.methods || []);
       } catch (err) {
         setEmployeeError(err instanceof Error ? err.message : "Failed to load payment methods");
       } finally {

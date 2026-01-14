@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 import {
   fetchBillingSummary,
   fetchInvoices,
-  type BillingSummary,
 } from "../api/billing";
 
 const formatDate = (value?: string | null) => {
@@ -29,7 +28,7 @@ const formatCurrency = (amount: number, currency: string) => {
 };
 
 export default function Billing() {
-  const [summary, setSummary] = useState<BillingSummary | null>(null);
+  const [summary, setSummary] = useState<any>(null);
   const [invoices, setInvoices] = useState<any[]>([]);
   const [isLoadingSummary, setIsLoadingSummary] = useState(true);
   const [isLoadingInvoices, setIsLoadingInvoices] = useState(true);
@@ -50,7 +49,15 @@ export default function Billing() {
   useEffect(() => {
     setIsLoadingInvoices(true);
     fetchInvoices(10)
-      .then((data) => setInvoices(Array.isArray(data) ? data : data?.invoices || []))
+      .then((data) => {
+        if (Array.isArray(data)) {
+          setInvoices(data);
+        } else if (data && typeof data === 'object' && 'invoices' in data) {
+          setInvoices(Array.isArray(data.invoices) ? data.invoices : []);
+        } else {
+          setInvoices([]);
+        }
+      })
       .catch((error) => {
         setErrorMessage(error instanceof Error ? error.message : "Failed to load invoices.");
       })
@@ -83,7 +90,7 @@ export default function Billing() {
               <div className="rounded-lg border border-gray-200 p-4">
                 <p className="text-sm text-gray-600">Monthly Charge</p>
                 <p className="mt-1 text-2xl font-semibold text-gray-900">
-                  {summary.monthlyCharge ? formatCurrency(summary.monthlyCharge, "USD") : "—"}
+                  {summary?.monthlyCharge ? formatCurrency(summary.monthlyCharge, "USD") : "—"}
                 </p>
               </div>
               <div className="rounded-lg border border-gray-200 p-4">
