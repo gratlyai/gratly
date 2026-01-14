@@ -261,8 +261,8 @@ const GratlyProfilePage: React.FC = () => {
     try {
       setIsRefreshingMethods(true);
       setEmployeeError("");
-      const methods = await refreshEmployeePaymentMethods(userId);
-      setEmployeePaymentMethods(methods);
+      const response = await refreshEmployeePaymentMethods(userId);
+      setEmployeePaymentMethods(response?.methods || response || []);
     } catch (err) {
       setEmployeeError(err instanceof Error ? err.message : "Failed to refresh payment methods");
     } finally {

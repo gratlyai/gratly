@@ -4,13 +4,10 @@ import {
   fetchOnboardingDetails,
   fetchRestaurantRoutingSummary,
   onboardRestaurant,
-  fetchBillingConfig,
-  updateBillingConfig,
   type OnboardingDetails,
   type OnboardRestaurantPayload,
   type RestaurantDetail,
   type RestaurantRoutingSummary,
-  type BillingConfig,
 } from "../api/superadmin";
 
 export default function Settings() {
@@ -37,10 +34,6 @@ export default function Settings() {
     adminEmail: "",
   });
   const [onboardingDetails, setOnboardingDetails] = useState<OnboardingDetails | null>(null);
-  const [billingConfig, setBillingConfig] = useState<BillingConfig | null>(null);
-  const [billingConfigStatus, setBillingConfigStatus] = useState<string | null>(null);
-  const [billingConfigError, setBillingConfigError] = useState<string | null>(null);
-  const [isSavingBillingConfig, setIsSavingBillingConfig] = useState(false);
 
   const loadRestaurants = () => {
     return fetchRestaurantRoutingSummary(userId).then((data) => {

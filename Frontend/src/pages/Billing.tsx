@@ -1,12 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router-dom";
 import {
-  createBillingPortal,
-  createCheckoutSession,
   fetchBillingSummary,
   fetchInvoices,
   type BillingSummary,
-  type InvoiceRecord,
 } from "../api/billing";
 
 const planCard = {
@@ -47,7 +44,7 @@ const formatCurrency = (amount: number, currency: string) => {
 export default function Billing() {
   const location = useLocation();
   const [summary, setSummary] = useState<BillingSummary | null>(null);
-  const [invoices, setInvoices] = useState<InvoiceRecord[]>([]);
+  const [invoices, setInvoices] = useState<any[]>([]);
   const [isLoadingSummary, setIsLoadingSummary] = useState(true);
   const [isLoadingInvoices, setIsLoadingInvoices] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -61,7 +58,7 @@ export default function Billing() {
 
   useEffect(() => {
     setIsLoadingSummary(true);
-    fetchBillingSummary()
+    fetchBillingSummary(0)
       .then((data) => {
         setSummary(data);
       })
@@ -74,16 +71,15 @@ export default function Billing() {
   useEffect(() => {
     setIsLoadingInvoices(true);
     fetchInvoices(10)
-      .then((data) => setInvoices(data.invoices))
+      .then((data) => setInvoices(Array.isArray(data) ? data : data?.invoices || []))
       .catch((error) => {
         setErrorMessage(error instanceof Error ? error.message : "Failed to load invoices.");
       })
       .finally(() => setIsLoadingInvoices(false));
   }, []);
 
-  const subscription = summary?.subscription ?? null;
-  const paymentMethod = summary?.paymentMethod ?? null;
-  const currentPlanKey = subscription?.planKey ?? null;
+  const monthlyCharge = summary?.monthlyCharge ?? null;
+  const paymentMethods = summary?.paymentMethods ?? [];
 
   const handleCheckout = async () => {
     setIsActionLoading(true);

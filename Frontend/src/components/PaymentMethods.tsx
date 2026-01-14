@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   fetchRestaurantPaymentMethods,
   fetchEmployeePaymentMethods,
@@ -12,13 +12,11 @@ import {
 interface PaymentMethodsProps {
   ownerId: number;
   ownerType: "restaurant" | "employee";
-  ownerName?: string;
 }
 
 export default function PaymentMethods({
   ownerId,
   ownerType,
-  ownerName = "Account",
 }: PaymentMethodsProps) {
   const [methods, setMethods] = useState<MoovPaymentMethod[]>([]);
   const [loading, setLoading] = useState(true);
@@ -84,7 +82,7 @@ export default function PaymentMethods({
       setMethods(
         methods.map((m) => ({
           ...m,
-          is_preferred: m.moov_payment_method_id === methodId,
+          isPreferred: m.moovPaymentMethodId === methodId,
         }))
       );
     } catch (err) {
@@ -98,12 +96,12 @@ export default function PaymentMethods({
 
   const formatMethodLabel = (method: MoovPaymentMethod): string => {
     const last4 = method.last4 ? `•••• ${method.last4}` : "••••";
-    const brand = method.brand || method.method_type || "Payment Method";
+    const brand = method.brand || method.methodType || "Payment Method";
     return `${brand} ${last4}`;
   };
 
   const getMethodIcon = (method: MoovPaymentMethod): string => {
-    const type = method.method_type?.toLowerCase() || "";
+    const type = method.methodType?.toLowerCase() || "";
     if (type.includes("bank") || type.includes("ach"))
       return "🏦";
     if (type.includes("card") || type.includes("debit"))
@@ -155,9 +153,9 @@ export default function PaymentMethods({
         <div className="space-y-2">
           {methods.map((method) => (
             <div
-              key={method.moov_payment_method_id}
+              key={method.moovPaymentMethodId}
               className={`flex items-center gap-4 rounded-lg border p-4 transition ${
-                method.is_preferred
+                method.isPreferred
                   ? "border-blue-200 bg-blue-50"
                   : "border-gray-200 hover:bg-gray-50"
               }`}
@@ -169,8 +167,8 @@ export default function PaymentMethods({
                   {formatMethodLabel(method)}
                 </p>
                 <div className="mt-1 flex gap-4 text-xs text-gray-500">
-                  <span>ID: {method.moov_payment_method_id.slice(0, 12)}...</span>
-                  {method.is_verified && (
+                  <span>ID: {method.moovPaymentMethodId.slice(0, 12)}...</span>
+                  {method.isVerified && (
                     <span className="flex items-center gap-1 text-emerald-600">
                       ✓ Verified
                     </span>
@@ -178,21 +176,21 @@ export default function PaymentMethods({
                 </div>
               </div>
 
-              {!method.is_preferred && (
+              {!method.isPreferred && (
                 <button
                   onClick={() =>
-                    handleSetPreferred(method.moov_payment_method_id)
+                    handleSetPreferred(method.moovPaymentMethodId)
                   }
-                  disabled={settingPreferred === method.moov_payment_method_id}
+                  disabled={settingPreferred === method.moovPaymentMethodId}
                   className="rounded-lg bg-gray-100 px-4 py-2 text-sm font-medium text-gray-900 transition hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {settingPreferred === method.moov_payment_method_id
+                  {settingPreferred === method.moovPaymentMethodId
                     ? "Setting..."
                     : "Set Preferred"}
                 </button>
               )}
 
-              {method.is_preferred && (
+              {method.isPreferred && (
                 <div className="rounded-lg bg-blue-100 px-4 py-2">
                   <p className="text-sm font-medium text-blue-900">Preferred</p>
                 </div>
