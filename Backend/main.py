@@ -249,7 +249,14 @@ async def apply_request_timezone(request: Request, call_next):
 def _run_startup_migrations() -> None:
     if _should_run_migrations():
         _apply_scripts_sql_once()
-    init_scheduler()
+    try:
+        print("[SCHEDULER] Initializing job scheduler...")
+        init_scheduler()
+        print("[SCHEDULER] Job scheduler initialized successfully")
+    except Exception as e:
+        print(f"[SCHEDULER ERROR] Failed to initialize scheduler: {e}")
+        import traceback
+        traceback.print_exc()
 
 @app.on_event("shutdown")
 def _run_shutdown() -> None:
