@@ -13,6 +13,7 @@ try:
         refresh_payment_methods,
         set_preferred_payment_method,
     )
+    from Backend.moov_jobs import _send_billing_email
 except ImportError:
     from db import _get_cursor, _fetch_restaurant_name
     from moov_service import (
@@ -23,6 +24,7 @@ except ImportError:
         refresh_payment_methods,
         set_preferred_payment_method,
     )
+    from moov_jobs import _send_billing_email
 
 router = APIRouter()
 
@@ -391,6 +393,17 @@ async def handle_moov_webhook(request: Request):
         try:
             cursor.execute(
                 """
+                SELECT ID AS charge_id, RESTAURANTID AS restaurant_id, AMOUNT_CENTS AS amount_cents
+                FROM GRATLYDB.MONTHLY_FEE_CHARGES
+                WHERE MOOV_INVOICE_ID = %s
+                LIMIT 1
+                """,
+                (invoice_id,),
+            )
+            charge_row = cursor.fetchone()
+
+            cursor.execute(
+                """
                 UPDATE GRATLYDB.MONTHLY_FEE_CHARGES
                 SET MOOV_INVOICE_STATUS = %s,
                     PAYMENT_STATUS = %s,
@@ -401,6 +414,29 @@ async def handle_moov_webhook(request: Request):
                 """,
                 (status, status, failure_reason, status, invoice_id),
             )
+
+            # Send emails based on invoice payment status
+            if charge_row:
+                charge_id = charge_row.get("charge_id")
+                restaurant_id = charge_row.get("restaurant_id")
+                amount_cents = charge_row.get("amount_cents")
+
+                if status in ("paid", "completed"):
+                    _send_billing_email(
+                        charge_id,
+                        restaurant_id,
+                        "payment_success",
+                        "Payment Received - Gratly Invoice",
+                        f"Your invoice payment of ${amount_cents / 100:.2f} has been successfully received.",
+                    )
+                elif status in ("failed", "refunded", "failed_settlement"):
+                    _send_billing_email(
+                        charge_id,
+                        restaurant_id,
+                        "payment_failed",
+                        "Payment Failed - Action Required",
+                        f"Your invoice payment of ${amount_cents / 100:.2f} failed. Reason: {failure_reason or 'Unknown'}. Please update your payment method.",
+                    )
         finally:
             cursor.close()
 

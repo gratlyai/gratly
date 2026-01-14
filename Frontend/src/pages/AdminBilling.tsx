@@ -1,221 +1,332 @@
-import React, { useEffect, useState } from "react";
-import axios from "axios";
+import React, { useState, useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import {
+  fetchBillingSummary,
+  fetchPaymentMethods,
+  startPaymentMethodOnboarding,
+  refreshPaymentMethods,
+  setPreferredPaymentMethod,
+  type BillingSummary,
+  type PaymentMethod,
+  type MonthlyInvoice,
+} from '../api/billing';
+import {
+  getStoredPermissions,
+  type PermissionState,
+} from '../auth/permissions';
 
-interface Job {
-  id: string;
-  name: string;
-  next_run: string | null;
-}
+const AdminBilling: React.FC = () => {
+  const navigate = useNavigate();
+  const { restaurantKey } = useParams();
+  const [billingSummary, setBillingSummary] = useState<BillingSummary | null>(null);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
+  const [invoices, setInvoices] = useState<MonthlyInvoice[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string>('');
+  const [isOnboarding, setIsOnboarding] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [permissions] = useState<PermissionState>(() =>
+    getStoredPermissions(localStorage.getItem('userId'))
+  );
 
-export default function AdminBilling() {
-  const [jobs, setJobs] = useState<Job[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [triggering, setTriggering] = useState<string | null>(null);
-  const [triggerResult, setTriggerResult] = useState<string | null>(null);
+  const restaurantId = restaurantKey ? Number(restaurantKey) : null;
 
-  const userId = Number(localStorage.getItem("userId") || "");
-
+  // Check admin access
   useEffect(() => {
-    const loadJobs = async () => {
+    if (!permissions.adminAccess && !permissions.superadminAccess) {
+      navigate('/');
+    }
+  }, [permissions, navigate]);
+
+  // Load billing data
+  useEffect(() => {
+    if (!restaurantId) return;
+
+    const loadData = async () => {
       try {
-        setLoading(true);
-        setError(null);
-        const response = await axios.get(
-          `/api/admin/jobs/status?user_id=${userId}`
-        );
-        setJobs(response.data.jobs || []);
+        setIsLoading(true);
+        setError('');
+        const [summary, methods] = await Promise.all([
+          fetchBillingSummary(restaurantId),
+          fetchPaymentMethods(restaurantId),
+        ]);
+        setBillingSummary(summary);
+        setPaymentMethods(methods);
+        if (summary.recentInvoices) {
+          setInvoices(summary.recentInvoices);
+        }
       } catch (err) {
-        setError(
-          err instanceof Error ? err.message : "Failed to load job status"
-        );
+        setError(err instanceof Error ? err.message : 'Failed to load billing data');
       } finally {
-        setLoading(false);
+        setIsLoading(false);
       }
     };
 
-    if (userId) {
-      loadJobs();
-      // Refresh every 30 seconds
-      const interval = setInterval(loadJobs, 30000);
-      return () => clearInterval(interval);
-    }
-  }, [userId]);
+    loadData();
+  }, [restaurantId]);
 
-  const triggerJob = async (jobName: string) => {
+  const handleStartOnboarding = async () => {
+    if (!restaurantId) return;
+
     try {
-      setTriggering(jobName);
-      setTriggerResult(null);
-      await axios.post(
-        `/api/admin/jobs/trigger/${jobName}?user_id=${userId}`
-      );
-      setTriggerResult(`✓ Job "${jobName}" triggered successfully`);
-      // Refresh job status
-      const response = await axios.get(
-        `/api/admin/jobs/status?user_id=${userId}`
-      );
-      setJobs(response.data.jobs || []);
+      setIsOnboarding(true);
+      setError('');
+      const returnUrl = `${window.location.origin}/business/${restaurantId}/billing`;
+      const refreshUrl = returnUrl;
+      const result = await startPaymentMethodOnboarding(restaurantId, returnUrl, refreshUrl);
+      if (result.redirectUrl) {
+        window.location.href = result.redirectUrl;
+      }
     } catch (err) {
-      setTriggerResult(
-        `✗ Failed to trigger job: ${
-          err instanceof Error ? err.message : "Unknown error"
-        }`
-      );
+      setError(err instanceof Error ? err.message : 'Failed to start onboarding');
     } finally {
-      setTriggering(null);
+      setIsOnboarding(false);
     }
   };
 
-  const formatNextRun = (isoString: string | null) => {
-    if (!isoString) return "Not scheduled";
+  const handleRefreshMethods = async () => {
+    if (!restaurantId) return;
+
     try {
-      const date = new Date(isoString);
-      return date.toLocaleString();
-    } catch {
-      return isoString;
+      setIsRefreshing(true);
+      setError('');
+      const methods = await refreshPaymentMethods(restaurantId);
+      setPaymentMethods(methods);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to refresh payment methods');
+    } finally {
+      setIsRefreshing(false);
     }
   };
+
+  const handleSetPreferred = async (methodId: string) => {
+    if (!restaurantId) return;
+
+    try {
+      setError('');
+      await setPreferredPaymentMethod(restaurantId, methodId);
+      setPaymentMethods(methods =>
+        methods.map(m => ({
+          ...m,
+          isPreferred: m.moovPaymentMethodId === methodId,
+        }))
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update preferred method');
+    }
+  };
+
+  const formatDate = (dateStr: string | null) => {
+    if (!dateStr) return 'N/A';
+    try {
+      return new Date(dateStr).toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      });
+    } catch {
+      return dateStr;
+    }
+  };
+
+  const formatAmount = (amountCents: number | null) => {
+    if (!amountCents) return '$0.00';
+    return `$${(amountCents / 100).toFixed(2)}`;
+  };
+
+  const getInvoiceStatusColor = (status: string | null) => {
+    switch (status?.toLowerCase()) {
+      case 'paid':
+      case 'completed':
+        return 'bg-green-50 text-green-700 border-green-200';
+      case 'failed':
+        return 'bg-red-50 text-red-700 border-red-200';
+      case 'unpaid':
+      case 'pending':
+        return 'bg-yellow-50 text-yellow-700 border-yellow-200';
+      default:
+        return 'bg-gray-50 text-gray-700 border-gray-200';
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-8">
+        <div className="max-w-4xl mx-auto">
+          <div className="bg-white rounded-xl shadow-md border border-gray-200 p-8">
+            <p className="text-gray-600">Loading billing information...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-4xl mx-auto">
+    <div className="min-h-screen bg-gray-50">
+      <div className="max-w-4xl mx-auto p-8">
+        {/* Header */}
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">Billing Management</h1>
-          <p className="mt-2 text-gray-600">
-            Monitor and manually trigger payment processing jobs
-          </p>
+          <h1 className="text-3xl font-bold text-gray-900">Billing</h1>
+          <p className="text-gray-600 mt-2">Manage your billing settings and payment methods</p>
         </div>
 
         {error && (
-          <div className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4">
-            <p className="text-sm text-red-700">
-              <strong>Error:</strong> {error}
-            </p>
+          <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+            <p className="text-sm font-semibold text-red-700">{error}</p>
           </div>
         )}
 
-        {triggerResult && (
-          <div
-            className={`mb-6 rounded-lg border p-4 ${
-              triggerResult.startsWith("✓")
-                ? "border-emerald-200 bg-emerald-50"
-                : "border-red-200 bg-red-50"
-            }`}
-          >
-            <p
-              className={`text-sm ${
-                triggerResult.startsWith("✓")
-                  ? "text-emerald-700"
-                  : "text-red-700"
-              }`}
+        {/* Billing Info Card */}
+        {billingSummary && (
+          <div className="bg-white rounded-xl shadow-md border border-gray-200 p-6 mb-6">
+            <h2 className="text-lg font-bold text-gray-900 mb-4">Billing Information</h2>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm text-gray-500">Billing Date</p>
+                <p className="text-lg font-semibold text-gray-900">
+                  {billingSummary.config?.billingDate
+                    ? `Day ${billingSummary.config.billingDate}`
+                    : 'Not configured'}
+                </p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500">Monthly Amount</p>
+                <p className="text-lg font-semibold text-gray-900">
+                  {formatAmount(billingSummary.config?.billingAmount)}
+                </p>
+              </div>
+              {billingSummary.upcomingInvoice && (
+                <div>
+                  <p className="text-sm text-gray-500">Next Invoice Due</p>
+                  <p className="text-lg font-semibold text-gray-900">
+                    {formatDate(billingSummary.upcomingInvoice.dueDate)}
+                  </p>
+                </div>
+              )}
+              <div>
+                <p className="text-sm text-gray-500">Status</p>
+                <p className="text-lg font-semibold text-gray-900">
+                  {billingSummary.config?.paidStatus === 'active' ? '✓ Active' : 'Inactive'}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Payment Methods Card */}
+        <div className="bg-white rounded-xl shadow-md border border-gray-200 p-6 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-bold text-gray-900">Payment Methods</h2>
+            <button
+              type="button"
+              onClick={handleRefreshMethods}
+              disabled={isRefreshing}
+              className="text-xs font-semibold text-gray-900 hover:text-gray-700 disabled:text-gray-400 disabled:cursor-not-allowed"
             >
-              {triggerResult}
-            </p>
+              {isRefreshing ? 'Refreshing...' : 'Refresh'}
+            </button>
           </div>
-        )}
 
-        <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
-          <h2 className="mb-6 text-xl font-semibold text-gray-900">
-            Scheduled Jobs
-          </h2>
-
-          {loading ? (
-            <div className="py-12 text-center">
-              <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-gray-200 border-t-gray-900"></div>
-              <p className="mt-4 text-gray-600">Loading job status...</p>
-            </div>
-          ) : jobs.length === 0 ? (
-            <div className="py-12 text-center">
-              <p className="text-gray-500">No jobs scheduled</p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {jobs.map((job) => (
+          {paymentMethods.length > 0 ? (
+            <div className="space-y-2">
+              {paymentMethods.map((method) => (
                 <div
-                  key={job.id}
-                  className="flex flex-col gap-4 rounded-lg border border-gray-200 p-4 sm:flex-row sm:items-center sm:justify-between"
+                  key={method.moovPaymentMethodId}
+                  className="flex items-center justify-between rounded-lg bg-gray-50 px-4 py-3"
                 >
                   <div className="flex-1">
-                    <h3 className="font-semibold text-gray-900">{job.name}</h3>
-                    <p className="mt-1 text-sm text-gray-600">
-                      Job ID: <code className="text-xs">{job.id}</code>
+                    <p className="font-semibold text-gray-900">
+                      {method.brand || method.methodType}
+                      {method.last4 && ` •••${method.last4}`}
                     </p>
-                    <p className="mt-2 text-sm text-gray-500">
-                      <strong>Next run:</strong> {formatNextRun(job.next_run)}
+                    <p className="text-xs text-gray-500">
+                      {method.isVerified ? '✓ Verified' : 'Not verified'} •{' '}
+                      {method.status}
                     </p>
                   </div>
-
-                  <button
-                    onClick={() => triggerJob(job.id)}
-                    disabled={triggering === job.id}
-                    className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {triggering === job.id ? (
-                      <>
-                        <span className="mr-2 inline-block h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"></span>
-                        Running...
-                      </>
-                    ) : (
-                      "Trigger Now"
+                  <div className="flex items-center gap-3">
+                    {method.isPreferred && (
+                      <span className="rounded-full bg-blue-100 px-2 py-1 text-[10px] font-semibold text-blue-700">
+                        Preferred
+                      </span>
                     )}
-                  </button>
+                    {!method.isPreferred && (
+                      <button
+                        type="button"
+                        onClick={() => handleSetPreferred(method.moovPaymentMethodId)}
+                        className="text-[10px] font-semibold text-gray-900 hover:text-gray-700"
+                      >
+                        Set preferred
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
+          ) : (
+            <p className="text-sm text-gray-500 mb-4">No payment methods on file</p>
           )}
+
+          <button
+            type="button"
+            onClick={handleStartOnboarding}
+            disabled={isOnboarding}
+            className="mt-4 w-full rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-400"
+          >
+            {isOnboarding ? 'Opening...' : 'Add or Update Payment Method'}
+          </button>
         </div>
 
-        <div className="mt-8 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
-          <h2 className="mb-4 text-lg font-semibold text-gray-900">
-            Job Descriptions
-          </h2>
-          <div className="space-y-4 text-sm text-gray-600">
-            <div>
-              <p className="font-semibold text-gray-900">
-                1. Generate Monthly Invoices
-              </p>
-              <p className="mt-1">
-                Creates monthly billing invoices for all restaurants and
-                initiates payment collection. Runs on the 1st of each month at
-                2 AM (restaurant local time).
-              </p>
-            </div>
+        {/* Invoices Card */}
+        <div className="bg-white rounded-xl shadow-md border border-gray-200 p-6">
+          <h2 className="text-lg font-bold text-gray-900 mb-4">Recent Invoices</h2>
 
-            <div className="border-t pt-4">
-              <p className="font-semibold text-gray-900">
-                2. Retry Failed Collections
-              </p>
-              <p className="mt-1">
-                Retries invoices that failed to collect on the first attempt.
-                Runs daily at 10 AM with 6-hour retry intervals between
-                failures.
-              </p>
+          {invoices.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200">
+                    <th className="text-left py-2 px-3 font-semibold text-gray-900">Period</th>
+                    <th className="text-left py-2 px-3 font-semibold text-gray-900">Amount</th>
+                    <th className="text-left py-2 px-3 font-semibold text-gray-900">Due Date</th>
+                    <th className="text-left py-2 px-3 font-semibold text-gray-900">Status</th>
+                    <th className="text-left py-2 px-3 font-semibold text-gray-900">Paid On</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {invoices.map((invoice) => (
+                    <tr key={invoice.id} className="border-b border-gray-100 hover:bg-gray-50">
+                      <td className="py-3 px-3 text-gray-900">{invoice.billingPeriod}</td>
+                      <td className="py-3 px-3 text-gray-900">
+                        {formatAmount(invoice.amountCents)}
+                      </td>
+                      <td className="py-3 px-3 text-gray-600">
+                        {formatDate(invoice.dueDate)}
+                      </td>
+                      <td className="py-3 px-3">
+                        <span
+                          className={`inline-block rounded-full px-2 py-1 text-[10px] font-semibold border ${getInvoiceStatusColor(
+                            invoice.paymentStatus
+                          )}`}
+                        >
+                          {invoice.paymentStatus || 'pending'}
+                        </span>
+                      </td>
+                      <td className="py-3 px-3 text-gray-600">
+                        {formatDate(invoice.paidAt)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-
-            <div className="border-t pt-4">
-              <p className="font-semibold text-gray-900">
-                3. Process Restaurant Debits
-              </p>
-              <p className="mt-1">
-                Aggregates approved payouts and creates a single nightly ACH
-                debit from each restaurant's bank account. Runs daily at 3 AM
-                (restaurant local time).
-              </p>
-            </div>
-
-            <div className="border-t pt-4">
-              <p className="font-semibold text-gray-900">
-                4. Disburse Employee Payouts
-              </p>
-              <p className="mt-1">
-                Creates individual payout transfers to employee bank accounts or
-                debit cards. Runs daily at 4 AM (restaurant local time) after
-                restaurant debits complete.
-              </p>
-            </div>
-          </div>
+          ) : (
+            <p className="text-sm text-gray-500">No invoices yet</p>
+          )}
         </div>
       </div>
     </div>
   );
-}
+};
+
+export default AdminBilling;
