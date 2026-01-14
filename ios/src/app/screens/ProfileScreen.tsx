@@ -17,6 +17,15 @@ import AppShell from "../components/AppShell";
 import { fetchPermissionCatalog } from "../../core/api/permissions";
 import { fetchUserProfile, updateUserProfile } from "../../core/api/users";
 import {
+  fetchEmployeeConnection,
+  fetchEmployeePaymentMethods,
+  refreshEmployeePaymentMethods,
+  setEmployeePreferredPaymentMethod,
+  startEmployeeOnboarding,
+  type MoovConnection,
+  type MoovPaymentMethod,
+} from "../../core/api/moov";
+import {
   defaultEmployeePermissions,
   permissionConfig,
   type PermissionDescriptor,
@@ -77,6 +86,14 @@ const ProfileScreen = () => {
   const [permissions, setPermissions] = useState<PermissionState>(
     session?.permissions ?? defaultEmployeePermissions,
   );
+
+  // Employee payment methods
+  const [employeePaymentMethods, setEmployeePaymentMethods] = useState<MoovPaymentMethod[]>([]);
+  const [employeeConnection, setEmployeeConnection] = useState<MoovConnection | null>(null);
+  const [isLoadingEmployeeData, setIsLoadingEmployeeData] = useState(false);
+  const [employeeMethodsError, setEmployeeMethodsError] = useState("");
+  const [isOnboarding, setIsOnboarding] = useState(false);
+  const [isRefreshingMethods, setIsRefreshingMethods] = useState(false);
 
   const isAdminUser = Boolean(session?.permissions?.adminAccess || session?.permissions?.superadminAccess);
   const initials =
@@ -146,6 +163,30 @@ const ProfileScreen = () => {
     return () => clearTimeout(timeoutId);
   }, [showSavedToast]);
 
+  // Load employee payment methods and connection
+  useEffect(() => {
+    if (!userId) return;
+
+    const loadEmployeeData = async () => {
+      try {
+        setIsLoadingEmployeeData(true);
+        setEmployeeMethodsError("");
+        const [methods, connection] = await Promise.all([
+          fetchEmployeePaymentMethods(userId),
+          fetchEmployeeConnection(userId),
+        ]);
+        setEmployeePaymentMethods(methods);
+        setEmployeeConnection(connection);
+      } catch (err) {
+        setEmployeeMethodsError(err instanceof Error ? err.message : "Failed to load payment methods");
+      } finally {
+        setIsLoadingEmployeeData(false);
+      }
+    };
+
+    loadEmployeeData();
+  }, [userId]);
+
   const handleEdit = () => {
     setIsEditing(true);
     setEditedProfile(profile);
@@ -194,6 +235,57 @@ const ProfileScreen = () => {
       setSaveError(message);
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleStartEmployeeOnboarding = async () => {
+    if (!userId) return;
+    try {
+      setIsOnboarding(true);
+      setEmployeeMethodsError("");
+      const returnUrl = "gratly://profile";
+      const refreshUrl = returnUrl;
+      const result = await startEmployeeOnboarding(userId, returnUrl, refreshUrl);
+      if (result.redirectUrl) {
+        // For iOS, we can use Linking to open the URL
+        // Since this is React Native, we would use Linking.openURL here
+        // But for now, we'll show an alert with instructions
+        alert(`Opening Moov onboarding flow`);
+      }
+    } catch (err) {
+      setEmployeeMethodsError(err instanceof Error ? err.message : "Failed to start onboarding");
+    } finally {
+      setIsOnboarding(false);
+    }
+  };
+
+  const handleRefreshEmployeeMethods = async () => {
+    if (!userId) return;
+    try {
+      setIsRefreshingMethods(true);
+      setEmployeeMethodsError("");
+      const methods = await refreshEmployeePaymentMethods(userId);
+      setEmployeePaymentMethods(methods);
+    } catch (err) {
+      setEmployeeMethodsError(err instanceof Error ? err.message : "Failed to refresh payment methods");
+    } finally {
+      setIsRefreshingMethods(false);
+    }
+  };
+
+  const handleSetPreferredEmployeeMethod = async (methodId: string) => {
+    if (!userId) return;
+    try {
+      setEmployeeMethodsError("");
+      await setEmployeePreferredPaymentMethod(userId, methodId);
+      setEmployeePaymentMethods(methods =>
+        methods.map(m => ({
+          ...m,
+          isPreferred: m.moovPaymentMethodId === methodId,
+        }))
+      );
+    } catch (err) {
+      setEmployeeMethodsError(err instanceof Error ? err.message : "Failed to update preferred method");
     }
   };
 
@@ -368,6 +460,88 @@ const ProfileScreen = () => {
                   <Text style={styles.permissionNote}>Permissions are managed by your admin or owner.</Text>
                 </View>
               </View>
+            </View>
+          </View>
+        )}
+
+        {/* Employee Payment Methods Section */}
+        {!isLoadingProfile && (
+          <View style={styles.sectionCard}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionCardTitle}>Payment Methods</Text>
+              <Pressable
+                onPress={handleRefreshEmployeeMethods}
+                disabled={isRefreshingMethods}
+              >
+                <Text style={[styles.refreshButton, isRefreshingMethods && styles.refreshButtonDisabled]}>
+                  {isRefreshingMethods ? "Refreshing..." : "Refresh"}
+                </Text>
+              </Pressable>
+            </View>
+            <View style={styles.sectionBody}>
+              {employeeMethodsError ? (
+                <View style={styles.errorBanner}>
+                  <Text style={styles.errorText}>{employeeMethodsError}</Text>
+                </View>
+              ) : null}
+
+              {isLoadingEmployeeData ? (
+                <ActivityIndicator size="large" color="#111827" style={{ marginVertical: 20 }} />
+              ) : (
+                <>
+                  {employeeConnection?.connected && (
+                    <View style={styles.successBanner}>
+                      <Text style={styles.successText}>✓ Moov Account Connected</Text>
+                      <Text style={styles.successSubtext}>Status: {employeeConnection.onboardingStatus || "verified"}</Text>
+                    </View>
+                  )}
+
+                  {employeePaymentMethods.length > 0 ? (
+                    <View style={styles.methodsList}>
+                      {employeePaymentMethods.map((method) => (
+                        <View key={method.moovPaymentMethodId} style={styles.methodItem}>
+                          <View style={styles.methodInfo}>
+                            <Text style={styles.methodBrand}>
+                              {method.brand || method.methodType}
+                              {method.last4 ? ` •••${method.last4}` : ""}
+                            </Text>
+                            <Text style={styles.methodStatus}>
+                              {method.isVerified ? "✓ Verified" : "Not verified"} • {method.status}
+                            </Text>
+                          </View>
+                          {method.isPreferred ? (
+                            <View style={styles.preferredBadge}>
+                              <Text style={styles.preferredText}>Preferred</Text>
+                            </View>
+                          ) : (
+                            <Pressable onPress={() => handleSetPreferredEmployeeMethod(method.moovPaymentMethodId)}>
+                              <Text style={styles.setPreferredLink}>Set preferred</Text>
+                            </Pressable>
+                          )}
+                        </View>
+                      ))}
+                    </View>
+                  ) : (
+                    <Text style={styles.emptyText}>No payment methods on file</Text>
+                  )}
+
+                  <Pressable
+                    style={[styles.actionButton, isOnboarding && styles.actionButtonDisabled]}
+                    onPress={handleStartEmployeeOnboarding}
+                    disabled={isOnboarding}
+                  >
+                    <Text style={styles.actionButtonText}>
+                      {isOnboarding ? "Opening..." : "Add or Update Payment Method"}
+                    </Text>
+                  </Pressable>
+
+                  {!employeeConnection?.connected && (
+                    <Text style={styles.infoText}>
+                      Set up your Moov account to receive instant payouts and manage payment methods.
+                    </Text>
+                  )}
+                </>
+              )}
             </View>
           </View>
         )}
@@ -719,6 +893,96 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#16a34a",
     fontFamily,
+  },
+  sectionHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  refreshButton: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: "#111827",
+    fontFamily,
+  },
+  refreshButtonDisabled: {
+    color: "#d1d5db",
+  },
+  methodsList: {
+    marginBottom: 12,
+    gap: 8,
+  },
+  methodItem: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: "#f3f4f6",
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+  },
+  methodInfo: {
+    flex: 1,
+  },
+  methodBrand: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#111827",
+    fontFamily,
+  },
+  methodStatus: {
+    fontSize: 11,
+    color: "#6b7280",
+    fontFamily,
+    marginTop: 4,
+  },
+  preferredBadge: {
+    backgroundColor: "#dbeafe",
+    borderRadius: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  preferredText: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: "#1e40af",
+    fontFamily,
+  },
+  setPreferredLink: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: "#111827",
+    fontFamily,
+  },
+  emptyText: {
+    fontSize: 12,
+    color: "#6b7280",
+    fontFamily,
+    marginBottom: 12,
+  },
+  actionButton: {
+    backgroundColor: "#111827",
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  actionButtonDisabled: {
+    opacity: 0.6,
+  },
+  actionButtonText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#ffffff",
+    fontFamily,
+  },
+  infoText: {
+    fontSize: 11,
+    color: "#6b7280",
+    fontFamily,
+    textAlign: "center",
+    marginTop: 8,
   },
 });
 

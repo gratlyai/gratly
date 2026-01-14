@@ -66,6 +66,15 @@ const GratlyProfilePage: React.FC = () => {
   const [showSavedToast, setShowSavedToast] = useState<boolean>(false);
   const [saveError, setSaveError] = useState<string>("");
   const [isSaving, setIsSaving] = useState<boolean>(false);
+
+  // Employee payment methods
+  const [employeePaymentMethods, setEmployeePaymentMethods] = useState<MoovPaymentMethod[]>([]);
+  const [employeeConnection, setEmployeeConnection] = useState<MoovConnection | null>(null);
+  const [isLoadingEmployeeData, setIsLoadingEmployeeData] = useState(false);
+  const [employeeError, setEmployeeError] = useState<string>("");
+  const [isOnboarding, setIsOnboarding] = useState(false);
+  const [isRefreshingMethods, setIsRefreshingMethods] = useState(false);
+
   const restaurantId = restaurantKey ? Number(restaurantKey) : null;
   const storedUserId = localStorage.getItem("userId");
   const userId = storedUserId && Number.isFinite(Number(storedUserId)) ? Number(storedUserId) : null;
@@ -148,6 +157,30 @@ const GratlyProfilePage: React.FC = () => {
     };
   }, []);
 
+  // Load employee payment methods and connection
+  useEffect(() => {
+    if (!userId) return;
+
+    const loadEmployeeData = async () => {
+      try {
+        setIsLoadingEmployeeData(true);
+        setEmployeeError("");
+        const [methods, connection] = await Promise.all([
+          fetchEmployeePaymentMethods(userId),
+          fetchEmployeeConnection(userId),
+        ]);
+        setEmployeePaymentMethods(methods);
+        setEmployeeConnection(connection);
+      } catch (err) {
+        setEmployeeError(err instanceof Error ? err.message : "Failed to load payment methods");
+      } finally {
+        setIsLoadingEmployeeData(false);
+      }
+    };
+
+    loadEmployeeData();
+  }, [userId]);
+
 
   const handleEdit = () => {
     setIsEditing(true);
@@ -202,6 +235,54 @@ const GratlyProfilePage: React.FC = () => {
       setSaveError(message);
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleStartEmployeeOnboarding = async () => {
+    if (!userId) return;
+    try {
+      setIsOnboarding(true);
+      setEmployeeError("");
+      const returnUrl = `${window.location.origin}/gratly-profile`;
+      const refreshUrl = returnUrl;
+      const result = await startEmployeeOnboarding(userId, returnUrl, refreshUrl);
+      if (result.redirectUrl) {
+        window.location.href = result.redirectUrl;
+      }
+    } catch (err) {
+      setEmployeeError(err instanceof Error ? err.message : "Failed to start onboarding");
+    } finally {
+      setIsOnboarding(false);
+    }
+  };
+
+  const handleRefreshEmployeeMethods = async () => {
+    if (!userId) return;
+    try {
+      setIsRefreshingMethods(true);
+      setEmployeeError("");
+      const methods = await refreshEmployeePaymentMethods(userId);
+      setEmployeePaymentMethods(methods);
+    } catch (err) {
+      setEmployeeError(err instanceof Error ? err.message : "Failed to refresh payment methods");
+    } finally {
+      setIsRefreshingMethods(false);
+    }
+  };
+
+  const handleSetPreferredEmployeeMethod = async (methodId: string) => {
+    if (!userId) return;
+    try {
+      setEmployeeError("");
+      await setEmployeePreferredPaymentMethod(userId, methodId);
+      setEmployeePaymentMethods(methods =>
+        methods.map(m => ({
+          ...m,
+          isPreferred: m.moovPaymentMethodId === methodId,
+        }))
+      );
+    } catch (err) {
+      setEmployeeError(err instanceof Error ? err.message : "Failed to update preferred method");
     }
   };
 
@@ -421,6 +502,96 @@ const GratlyProfilePage: React.FC = () => {
             </div>
           </div>
         )}
+
+        {/* Employee Payment Methods Card */}
+        <div className="bg-white rounded-xl shadow-md border border-gray-200 p-6 mt-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-bold text-gray-900">Payment Methods</h3>
+            <button
+              type="button"
+              onClick={handleRefreshEmployeeMethods}
+              disabled={isRefreshingMethods}
+              className="text-xs font-semibold text-gray-900 hover:text-gray-700 disabled:text-gray-400 disabled:cursor-not-allowed"
+            >
+              {isRefreshingMethods ? "Refreshing..." : "Refresh"}
+            </button>
+          </div>
+
+          {employeeError && (
+            <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+              <p className="text-sm font-semibold text-red-700">{employeeError}</p>
+            </div>
+          )}
+
+          {isLoadingEmployeeData ? (
+            <p className="text-gray-600">Loading payment methods...</p>
+          ) : (
+            <>
+              {employeeConnection?.connected && (
+                <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
+                  <p className="text-sm font-semibold text-emerald-900">✓ Moov Account Connected</p>
+                  <p className="text-xs text-emerald-700 mt-1">
+                    Status: {employeeConnection.onboardingStatus || "verified"}
+                  </p>
+                </div>
+              )}
+
+              {employeePaymentMethods.length > 0 ? (
+                <div className="space-y-2 mb-4">
+                  {employeePaymentMethods.map((method) => (
+                    <div
+                      key={method.moovPaymentMethodId}
+                      className="flex items-center justify-between rounded-lg bg-gray-50 px-4 py-3"
+                    >
+                      <div className="flex-1">
+                        <p className="font-semibold text-gray-900">
+                          {method.brand || method.methodType}
+                          {method.last4 && ` •••${method.last4}`}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {method.isVerified ? "✓ Verified" : "Not verified"} • {method.status}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        {method.isPreferred && (
+                          <span className="rounded-full bg-blue-100 px-2 py-1 text-[10px] font-semibold text-blue-700">
+                            Preferred
+                          </span>
+                        )}
+                        {!method.isPreferred && (
+                          <button
+                            type="button"
+                            onClick={() => handleSetPreferredEmployeeMethod(method.moovPaymentMethodId)}
+                            className="text-[10px] font-semibold text-gray-900 hover:text-gray-700"
+                          >
+                            Set preferred
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500 mb-4">No payment methods on file</p>
+              )}
+
+              <button
+                type="button"
+                onClick={handleStartEmployeeOnboarding}
+                disabled={isOnboarding}
+                className="w-full rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-400"
+              >
+                {isOnboarding ? "Opening..." : "Add or Update Payment Method"}
+              </button>
+
+              {!employeeConnection?.connected && (
+                <p className="text-xs text-gray-500 mt-3 text-center">
+                  Set up your Moov account to receive instant payouts and manage payment methods.
+                </p>
+              )}
+            </>
+          )}
+        </div>
 
         {/* Additional Info Card */}
         <div className="bg-white rounded-xl shadow-md border border-gray-200 p-6 mt-6">
