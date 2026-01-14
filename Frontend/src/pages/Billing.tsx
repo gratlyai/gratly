@@ -49,7 +49,7 @@ export default function Billing() {
   useEffect(() => {
     setIsLoadingInvoices(true);
     fetchInvoices(10)
-      .then((data) => {
+      .then((data: any) => {
         if (Array.isArray(data)) {
           setInvoices(data);
         } else if (data && typeof data === 'object' && 'invoices' in data) {

@@ -513,15 +513,6 @@ const GratlyProfilePage: React.FC = () => {
             <p className="text-gray-600">Loading payment methods...</p>
           ) : (
             <>
-              {employeeConnection?.connected && (
-                <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
-                  <p className="text-sm font-semibold text-emerald-900">✓ Moov Account Connected</p>
-                  <p className="text-xs text-emerald-700 mt-1">
-                    Status: {employeeConnection.onboardingStatus || "verified"}
-                  </p>
-                </div>
-              )}
-
               {employeePaymentMethods.length > 0 ? (
                 <div className="space-y-2 mb-4">
                   {employeePaymentMethods.map((method) => (
@@ -569,12 +560,6 @@ const GratlyProfilePage: React.FC = () => {
               >
                 {isOnboarding ? "Opening..." : "Add or Update Payment Method"}
               </button>
-
-              {!employeeConnection?.connected && (
-                <p className="text-xs text-gray-500 mt-3 text-center">
-                  Set up your Moov account to receive instant payouts and manage payment methods.
-                </p>
-              )}
             </>
           )}
         </div>
