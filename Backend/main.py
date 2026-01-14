@@ -51,6 +51,7 @@ if __package__:
     from .moov_payments import router as moov_payments_router
     from .payment_routing import router as payment_routing_router
     from .billing import router as billing_router
+    from .moov_local import router as moov_local_router
     from .scheduler import init_scheduler, shutdown_scheduler
 else:
     from security import hash_password, verify_password
@@ -79,6 +80,7 @@ else:
     from moov_payments import router as moov_payments_router
     from payment_routing import router as payment_routing_router
     from billing import router as billing_router
+    from moov_local import router as moov_local_router
     from scheduler import init_scheduler, shutdown_scheduler
 
 app = FastAPI()
@@ -341,6 +343,7 @@ app.include_router(reports_router)
 app.include_router(moov_payments_router)
 app.include_router(payment_routing_router)
 app.include_router(billing_router)
+app.include_router(moov_local_router)
 
 print("DB HOST:", _get_env_or_ini("DB_HOST"))
 print("DB USER:", _get_env_or_ini("DB_USER"))
