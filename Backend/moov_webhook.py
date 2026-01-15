@@ -169,18 +169,28 @@ def redact_sensitive_fields(data: Any) -> Any:
         return data
 
 
-def verify_webhook_signature(payload_raw: bytes, signature: str, secret: str) -> bool:
+def verify_webhook_signature(
+    payload_raw: bytes,
+    timestamp: str,
+    nonce: str,
+    webhook_id: str,
+    signature: str,
+    secret: str
+) -> bool:
     """
-    Verify a Moov webhook signature.
+    Verify a Moov webhook signature using SHA-512 HMAC.
 
-    Moov uses HMAC-SHA256 signatures. This function:
-    - Only verifies if not in local mode
-    - Logs warnings if verification is disabled
-    - Returns True if verification passes or is disabled
+    Moov signature format (v2025.07.00):
+    - Concatenate: timestamp + "|" + nonce + "|" + webhook_id
+    - Calculate HMAC-SHA512 using webhook secret
+    - Compare with X-Signature header
 
     Args:
-        payload_raw: Raw webhook payload bytes
-        signature: Signature from X-Moov-Signature header
+        payload_raw: Raw webhook payload bytes (not used in Moov's scheme)
+        timestamp: X-Timestamp header value
+        nonce: X-Nonce header value
+        webhook_id: X-Webhook-ID header value
+        signature: X-Signature header value
         secret: Moov webhook secret
 
     Returns:
@@ -192,13 +202,27 @@ def verify_webhook_signature(payload_raw: bytes, signature: str, secret: str) ->
 
     try:
         import hmac
+
+        # Moov's signature payload: "{timestamp}|{nonce}|{webhook_id}"
+        signed_payload = f"{timestamp}|{nonce}|{webhook_id}"
+
+        # Calculate HMAC-SHA512 (Moov uses SHA-512, not SHA256!)
         expected_signature = hmac.new(
-            secret.encode(), payload_raw, hashlib.sha256
+            secret.encode(),
+            signed_payload.encode(),
+            hashlib.sha512  # Critical: Moov uses SHA-512
         ).hexdigest()
+
         is_valid = hmac.compare_digest(signature, expected_signature)
+
         if not is_valid:
-            logger.error("Webhook signature verification failed")
+            logger.error(
+                f"Webhook signature verification failed: "
+                f"expected {expected_signature[:16]}..., got {signature[:16]}..."
+            )
+
         return is_valid
+
     except Exception as e:
         logger.error(f"Webhook signature verification error: {str(e)}")
         return False

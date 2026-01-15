@@ -399,7 +399,29 @@ def update_employee_preferred_method(user_id: int, payload: PreferredPaymentPayl
 
 @router.post("/api/webhooks/moov")
 async def handle_moov_webhook(request: Request):
-    payload = await request.json()
+    import os
+    from Backend.moov_webhook import verify_webhook_signature
+
+    # Get raw body for signature verification
+    payload_raw = await request.body()
+    payload = await request.json() if payload_raw else {}
+
+    # Extract Moov signature headers (v2025.07.00)
+    timestamp = request.headers.get("X-Timestamp", "")
+    nonce = request.headers.get("X-Nonce", "")
+    webhook_id = request.headers.get("X-Webhook-ID", "")
+    signature = request.headers.get("X-Signature", "")
+
+    # Verify signature
+    webhook_secret = os.getenv("MOOV_WEBHOOK_SECRET", "")
+    if not verify_webhook_signature(
+        payload_raw, timestamp, nonce, webhook_id, signature, webhook_secret
+    ):
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Webhook signature verification failed for {webhook_id}")
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+
     event_id = payload.get("id") or payload.get("eventID") or payload.get("event_id")
     event_type = payload.get("type") or payload.get("eventType") or payload.get("event_type") or "unknown"
     if not event_id:
