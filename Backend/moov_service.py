@@ -194,6 +194,38 @@ def _store_moov_account(owner_type: str, owner_id: int, moov_account_id: str) ->
         cursor.close()
 
 
+def _store_account_status(
+    owner_type: str,
+    owner_id: int,
+    status: Optional[str],
+    verification_status: Optional[str],
+    capabilities: Optional[List[Dict[str, Any]]]
+) -> None:
+    """Store account status and verification details."""
+    cursor = _get_cursor(dictionary=True)
+    try:
+        cursor.execute(
+            """
+            UPDATE GRATLYDB.MOOV_ACCOUNTS
+            SET STATUS = %s,
+                VERIFICATION_STATUS = %s,
+                CAPABILITIES_JSON = %s,
+                VERIFICATION_UPDATED_AT = NOW(),
+                UPDATED_AT = NOW()
+            WHERE OWNER_TYPE = %s AND OWNER_ID = %s
+            """,
+            (
+                status,
+                verification_status,
+                json.dumps(capabilities) if capabilities else None,
+                owner_type,
+                owner_id
+            ),
+        )
+    finally:
+        cursor.close()
+
+
 def _fetch_moov_account(owner_type: str, owner_id: int) -> Optional[str]:
     cursor = _get_cursor(dictionary=True)
     try:
@@ -228,6 +260,16 @@ def ensure_moov_account(owner_type: str, owner_id: int, payload: Dict[str, Any])
         if not account_id:
             raise HTTPException(status_code=502, detail="Moov account creation failed")
         _store_moov_account(owner_type, owner_id, account_id)
+
+        # Store initial status and capabilities
+        _store_account_status(
+            owner_type,
+            owner_id,
+            response.get("status"),
+            response.get("verification", {}).get("status"),
+            response.get("capabilities")
+        )
+
         return {"account_id": account_id}
 
     result, _ = run_idempotent("moov_account", f"{owner_type}:{owner_id}", _create)
@@ -565,6 +607,110 @@ def collect_invoice(invoice_id: str, payment_method_id: str) -> Dict[str, Any]:
     )
 
 
+def validate_transfer_request(
+    source_account_id: str,
+    source_payment_method_id: str,
+    dest_account_id: str,
+    dest_payment_method_id: str,
+    amount_cents: int,
+    currency: str = "USD"
+) -> Tuple[bool, Optional[str]]:
+    """
+    Validate a transfer request before submission using Moov's transfer-options endpoint.
+
+    Args:
+        source_account_id: Source Moov account ID
+        source_payment_method_id: Source payment method ID
+        dest_account_id: Destination account ID
+        dest_payment_method_id: Destination payment method ID
+        amount_cents: Amount in cents
+        currency: Currency code (default USD)
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # 1. Basic validation
+    if amount_cents <= 0:
+        return False, "Transfer amount must be positive"
+
+    if currency != "USD":
+        return False, "Only USD transfers currently supported"
+
+    # 2. Check source account capabilities
+    source_ready, source_error = verify_account_capabilities(
+        source_account_id,
+        ["send-funds"]
+    )
+    if not source_ready:
+        return False, f"Source account not ready: {source_error}"
+
+    # 3. Check destination account capabilities
+    dest_ready, dest_error = verify_account_capabilities(
+        dest_account_id,
+        ["receive-funds"]
+    )
+    if not dest_ready:
+        return False, f"Destination account not ready: {dest_error}"
+
+    # 4. Validate payment methods
+    source_is_valid, source_method_error = validate_payment_method_for_transfer(
+        "restaurant", -1, source_payment_method_id, "source"
+    )
+    if not source_is_valid and source_method_error:
+        # Not necessarily a blocker - source might be in Moov wallet
+        logger.warning(f"Source payment method validation: {source_method_error}")
+
+    dest_is_valid, dest_method_error = validate_payment_method_for_transfer(
+        "employee", -1, dest_payment_method_id, "destination"
+    )
+    if not dest_is_valid and dest_method_error:
+        # Not necessarily a blocker - destination might be in Moov wallet
+        logger.warning(f"Destination payment method validation: {dest_method_error}")
+
+    # 5. Use Moov's transfer-options endpoint to validate compatibility
+    try:
+        options_payload = {
+            "source": {
+                "accountID": source_account_id,
+                "paymentMethodID": source_payment_method_id
+            },
+            "destination": {
+                "accountID": dest_account_id
+            },
+            "amount": {
+                "currency": currency,
+                "value": amount_cents
+            }
+        }
+
+        # Call transfer-options endpoint
+        response = _moov_request_with_retry(
+            "POST",
+            "/transfer-options",
+            json_body=options_payload,
+            max_retries=2
+        )
+
+        # Check if any valid payment methods returned for destination
+        payment_methods = response.get("paymentMethods", [])
+
+        # Verify the destination payment method is in the valid list
+        if payment_methods:
+            valid_method_ids = [pm.get("paymentMethodID") for pm in payment_methods]
+            if dest_payment_method_id not in valid_method_ids:
+                return False, f"Payment method combination not supported by Moov"
+
+        return True, None
+
+    except HTTPException as e:
+        # If transfer-options fails, log but don't block (graceful degradation)
+        logger.warning(f"Transfer-options validation failed: {e.detail}")
+        return True, None  # Allow transfer to proceed
+
+
 def create_transfer(
     transfer_type: str,
     amount_cents: int,
@@ -575,6 +721,48 @@ def create_transfer(
     metadata: Dict[str, Any],
     idempotency_key: str,
 ) -> Dict[str, Any]:
+    """
+    Create a transfer with pre-flight validation.
+
+    Validates:
+    - Source/destination capabilities
+    - Amount constraints
+    - Payment method compatibility
+
+    Args:
+        transfer_type: Type of transfer (nightly_debit, payout, invoice_collection, etc.)
+        amount_cents: Amount in cents
+        currency: Currency code (default USD)
+        source: {'accountID': ..., 'paymentMethodID': ...}
+        destination: {'accountID': ...}
+        description: Transfer description
+        metadata: Additional metadata
+        idempotency_key: Idempotency key for idempotent requests
+
+    Returns:
+        Moov transfer response
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # Pre-flight validation
+    source_account = source.get("accountID")
+    source_method = source.get("paymentMethodID")
+    dest_account = destination.get("accountID")
+    dest_method = destination.get("paymentMethodID")
+
+    # Only validate if we have all required IDs
+    if source_account and source_method and dest_account and dest_method:
+        is_valid, error = validate_transfer_request(
+            source_account, source_method,
+            dest_account, dest_method,
+            amount_cents, currency
+        )
+        if not is_valid:
+            logger.error(f"Transfer validation failed: {error}")
+            raise HTTPException(status_code=400, detail=f"Transfer validation failed: {error}")
+
+    # Build transfer payload matching Moov API v2025.07.00 spec
     payload = {
         "amount": {"currency": currency, "value": amount_cents},
         "source": source,
@@ -582,12 +770,16 @@ def create_transfer(
         "description": description,
         "metadata": metadata,
     }
-    response = _moov_request(
+
+    # Make request with retry logic
+    response = _moov_request_with_retry(
         "POST",
         "/transfers",
         json_body=payload,
         idempotency_key=idempotency_key,
+        max_retries=3
     )
+
     return response
 
 
