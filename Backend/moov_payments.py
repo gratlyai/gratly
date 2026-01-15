@@ -195,6 +195,17 @@ def _update_transfer_status(moov_transfer_id: str, status: str, failure_reason: 
 def _build_restaurant_account_payload(restaurant_id: int) -> Dict[str, Any]:
     restaurant_name = _fetch_restaurant_name(restaurant_id) or "Restaurant"
     contact = _fetch_restaurant_contact(restaurant_id)
+
+    # Build contact object, excluding None values (Moov doesn't accept null)
+    contact_obj = {}
+    contact_name = contact.get("name") or restaurant_name
+    if contact_name:
+        contact_obj["name"] = contact_name
+    if contact.get("email"):
+        contact_obj["email"] = contact.get("email")
+    if contact.get("phone"):
+        contact_obj["phone"] = contact.get("phone")
+
     return {
         "accountType": "business",
         "profile": {
@@ -203,30 +214,32 @@ def _build_restaurant_account_payload(restaurant_id: int) -> Dict[str, Any]:
             }
         },
         "metadata": {"restaurant_id": str(restaurant_id)},
-        "contact": {
-            "name": contact.get("name") or restaurant_name,
-            "email": contact.get("email"),
-            "phone": contact.get("phone"),
-        },
+        "contact": contact_obj,  # Only include non-null values
         "capabilities": ["wallet", "send-funds", "receive-funds", "invoicing"],
     }
 
 
 def _build_employee_account_payload(user_id: int) -> Dict[str, Any]:
     profile = _fetch_user_profile(user_id)
+
+    # Build contact object, excluding None values (Moov doesn't accept null)
+    contact = {}
+    if profile.get("name"):
+        contact["name"] = profile.get("name")
+    if profile.get("email"):
+        contact["email"] = profile.get("email")
+    if profile.get("phone"):
+        contact["phone"] = profile.get("phone")
+
     return {
         "accountType": "individual",
         "profile": {
             "individual": {
-                "name": profile.get("name"),
+                "name": profile.get("name") or "Employee",
             }
         },
         "metadata": {"user_id": str(user_id)},
-        "contact": {
-            "name": profile.get("name"),
-            "email": profile.get("email"),
-            "phone": profile.get("phone"),
-        },
+        "contact": contact,  # Only include non-null values
         "capabilities": ["wallet", "receive-funds"],
     }
 
