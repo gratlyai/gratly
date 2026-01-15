@@ -20,6 +20,8 @@ try:
         select_billing_payment_method,
         select_employee_payout_method,
         select_restaurant_debit_method,
+        verify_account_capabilities,
+        _fetch_moov_account,
         _get_platform_account_id,
     )
 except ImportError:
@@ -33,6 +35,8 @@ except ImportError:
         select_billing_payment_method,
         select_employee_payout_method,
         select_restaurant_debit_method,
+        verify_account_capabilities,
+        _fetch_moov_account,
         _get_platform_account_id,
     )
 
@@ -341,6 +345,21 @@ def nightly_restaurant_debit_job() -> Dict[str, Any]:
             if not method:
                 continue
 
+            # Before creating transfer, verify account is ready
+            moov_account_id = _fetch_moov_account("restaurant", restaurant_id)
+            if not moov_account_id:
+                logger.warning(f"Restaurant {restaurant_id} has no Moov account - skipping debit")
+                continue
+
+            # Check if account has required capabilities
+            is_ready, error = verify_account_capabilities(moov_account_id, ["send-funds"])
+            if not is_ready:
+                logger.warning(
+                    f"Restaurant {restaurant_id} not ready for debit: {error} - will retry next cycle"
+                )
+                # TODO: Update batch status to indicate pending verification if batch already created
+                continue
+
             def _create_batch():
                 cursor.execute(
                     """
@@ -491,6 +510,44 @@ def payout_disbursement_job() -> Dict[str, Any]:
             method = select_employee_payout_method(restaurant_id, employee_user_id)
             if not method:
                 continue
+
+            # Before creating payout transfer, verify employee account is ready
+            employee_moov_account = _fetch_moov_account("employee", employee_user_id)
+            if not employee_moov_account:
+                logger.warning(f"Employee {employee_user_id} has no Moov account - skipping payout")
+                # Mark as no_account so we don't retry indefinitely
+                cursor.execute(
+                    """
+                    UPDATE GRATLYDB.PAYOUT_FINAL
+                    SET PAYOUT_STATUS = %s,
+                        UPDATED_AT = NOW()
+                    WHERE PAYOUT_FINALID = %s
+                    """,
+                    ("no_account", payout_final_id),
+                )
+                conn.commit()
+                continue
+
+            # Verify employee can receive funds
+            is_ready, error = verify_account_capabilities(employee_moov_account, ["receive-funds"])
+            if not is_ready:
+                logger.warning(
+                    f"Employee {employee_user_id} not ready for payout: {error} - will retry next cycle"
+                )
+                # Mark as pending verification so we can retry when ready
+                cursor.execute(
+                    """
+                    UPDATE GRATLYDB.PAYOUT_FINAL
+                    SET PAYOUT_STATUS = %s,
+                        FAILURE_REASON = %s,
+                        UPDATED_AT = NOW()
+                    WHERE PAYOUT_FINALID = %s
+                    """,
+                    ("pending_verification", error, payout_final_id),
+                )
+                conn.commit()
+                continue
+
             if rail == "instant":
                 if method.get("METHOD_TYPE") not in ("rtp", "rtp_bank", "debit_card"):
                     rail = "same_day_ach"
@@ -593,5 +650,64 @@ def payout_disbursement_job() -> Dict[str, Any]:
         result = {"processed": processed}
         logger.info(f"[JOB] payout_disbursement_job completed at {datetime.now()}: {result}")
         return result
+    finally:
+        cursor.close()
+
+
+def retry_pending_verification_payouts() -> Dict[str, Any]:
+    """
+    Retry payouts that were blocked due to pending KYC/capability verification.
+    Runs every 6 hours to check if accounts have been verified.
+    """
+    logger.info(f"[JOB] retry_pending_verification_payouts started at {datetime.now()}")
+    cursor = _get_cursor(dictionary=True)
+    processed = 0
+
+    try:
+        # Find payouts stuck in pending_verification
+        cursor.execute(
+            """
+            SELECT PAYOUT_FINALID, EMPLOYEEGUID, RESTAURANTID
+            FROM GRATLYDB.PAYOUT_FINAL
+            WHERE PAYOUT_STATUS = 'pending_verification'
+              AND UPDATED_AT < DATE_SUB(NOW(), INTERVAL 1 HOUR)
+            LIMIT 100
+            """
+        )
+
+        for row in cursor.fetchall() or []:
+            payout_final_id = row["PAYOUT_FINALID"]
+            employee_guid = row["EMPLOYEEGUID"]
+
+            # Get employee user ID
+            employee_user_id = _fetch_user_id_for_employee_guid(employee_guid)
+            if not employee_user_id:
+                continue
+
+            # Check if verification is now complete
+            moov_account_id = _fetch_moov_account("employee", employee_user_id)
+            if not moov_account_id:
+                continue
+
+            is_ready, error = verify_account_capabilities(moov_account_id, ["receive-funds"])
+            if is_ready:
+                # Clear the block and let normal payout job pick it up
+                cursor.execute(
+                    """
+                    UPDATE GRATLYDB.PAYOUT_FINAL
+                    SET PAYOUT_STATUS = NULL,
+                        FAILURE_REASON = NULL,
+                        UPDATED_AT = NOW()
+                    WHERE PAYOUT_FINALID = %s
+                    """,
+                    (payout_final_id,),
+                )
+                processed += 1
+                logger.info(f"Cleared verification block for payout {payout_final_id}")
+
+        result = {"processed": processed}
+        logger.info(f"[JOB] retry_pending_verification_payouts completed: {result}")
+        return result
+
     finally:
         cursor.close()
