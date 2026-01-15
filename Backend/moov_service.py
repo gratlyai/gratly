@@ -44,7 +44,11 @@ def _moov_request(
     if params:
         url = f"{url}?{urllib.parse.urlencode(params)}"
 
-    headers = {"Accept": "application/json", "Authorization": _moov_auth_header()}
+    headers = {
+        "Accept": "application/json",
+        "Authorization": _moov_auth_header(),
+        "x-moov-version": "v2025.07.00"
+    }
     data = None
     if json_body is not None:
         headers["Content-Type"] = "application/json"
