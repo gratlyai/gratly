@@ -1,6 +1,7 @@
 from datetime import datetime
 import json
 import os
+import time
 import urllib.parse
 import urllib.request
 import base64
@@ -77,10 +78,89 @@ def _moov_request(
             except json.JSONDecodeError:
                 return {"raw": decoded}
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8") if exc.fp else str(exc)
-        raise HTTPException(status_code=502, detail=f"Moov request failed ({url}): {detail}") from exc
+        # Parse Moov's error response structure
+        try:
+            error_body = exc.read().decode("utf-8") if exc.fp else "{}"
+            error_data = json.loads(error_body)
+
+            # Moov API v2025.07.00 error structure: {"error": "description"}
+            error_message = error_data.get("error", str(exc))
+            error_code = error_data.get("code")  # Optional error code
+            error_details = error_data.get("details", [])  # Validation errors
+
+            # Build detailed error message
+            detail_parts = [f"Moov API error: {error_message}"]
+            if error_code:
+                detail_parts.append(f"Code: {error_code}")
+            if error_details:
+                detail_parts.append(f"Details: {json.dumps(error_details)}")
+
+            detail = " | ".join(detail_parts)
+
+            # Map Moov HTTP codes to appropriate response codes
+            status_map = {
+                400: 400,  # Bad request - client error
+                401: 401,  # Unauthorized
+                403: 403,  # Forbidden
+                404: 404,  # Not found
+                422: 422,  # Unprocessable entity - validation error
+                429: 429,  # Rate limit
+                500: 502,  # Moov server error -> our 502
+                504: 504,  # Gateway timeout
+            }
+            status_code = status_map.get(exc.code, 502)
+
+            # Log the full error for debugging
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Moov API error: {exc.code} {detail}", extra={
+                "moov_error_code": error_code,
+                "moov_error_details": error_details,
+                "url": url
+            })
+
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+
+        except (json.JSONDecodeError, KeyError) as parse_error:
+            # Fallback if response isn't JSON
+            import logging
+            logger = logging.getLogger(__name__)
+            detail = exc.read().decode("utf-8") if exc.fp else str(exc)
+            logger.error(f"Moov API error (unparseable): {exc.code} {detail}")
+            raise HTTPException(status_code=502, detail=f"Moov request failed: {detail}") from exc
     except urllib.error.URLError as exc:
         raise HTTPException(status_code=502, detail=f"Moov request failed: {exc}") from exc
+
+
+def _moov_request_with_retry(
+    method: str,
+    path: str,
+    params: Optional[Dict[str, Any]] = None,
+    json_body: Optional[Dict[str, Any]] = None,
+    idempotency_key: Optional[str] = None,
+    max_retries: int = 3,
+) -> Dict[str, Any]:
+    """
+    Make Moov API request with automatic retry for transient errors.
+    Retries on rate limits (429) and server errors (502, 504) with exponential backoff.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            return _moov_request(method, path, params, json_body, idempotency_key)
+        except HTTPException as e:
+            last_error = e
+            # Only retry on rate limits (429) and server errors (502, 504)
+            if e.status_code in (429, 502, 504) and attempt < max_retries - 1:
+                wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                logger.warning(f"Moov API error {e.status_code}, retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})")
+                time.sleep(wait_time)
+                continue
+            raise
+    raise last_error
 
 
 def _get_platform_account_id() -> str:
@@ -160,6 +240,54 @@ def ensure_moov_account(owner_type: str, owner_id: int, payload: Dict[str, Any])
     return result["account_id"]
 
 
+def _get_required_capabilities(owner_type: str) -> List[str]:
+    """Get required capabilities based on account type."""
+    if owner_type == "restaurant":
+        return ["send-funds", "collect-funds", "wallet"]
+    else:  # employee
+        return ["receive-funds", "wallet"]
+
+
+def verify_account_capabilities(
+    moov_account_id: str,
+    required_capabilities: List[str]
+) -> Tuple[bool, Optional[str]]:
+    """
+    Verify account has required capabilities enabled.
+
+    Args:
+        moov_account_id: Moov account ID
+        required_capabilities: List of required capability names
+
+    Returns:
+        Tuple of (is_ready, blocking_reason)
+    """
+    try:
+        account = fetch_account(moov_account_id)
+        capabilities = account.get("capabilities") or []
+
+        # Check if all required capabilities are present and enabled
+        for cap_name in required_capabilities:
+            cap = next((c for c in capabilities if c.get("capability") == cap_name), None)
+            if not cap:
+                return False, f"Missing capability: {cap_name}"
+
+            status = cap.get("status")
+            if status not in ("enabled", "approved"):
+                return False, f"Capability {cap_name} not enabled (status: {status})"
+
+        # Check account verification status
+        verification = account.get("verification") or {}
+        verification_status = verification.get("status")
+        if verification_status in ("failed", "rejected"):
+            return False, f"Account verification failed: {verification.get('failureReason')}"
+
+        return True, None
+
+    except HTTPException as e:
+        return False, f"Cannot verify capabilities: {e.detail}"
+
+
 def create_onboarding_link(
     moov_account_id: str,
     return_url: str,
@@ -181,6 +309,93 @@ def create_onboarding_link(
     if not link:
         raise HTTPException(status_code=502, detail="Moov onboarding link missing")
     return link
+
+
+# Moov API v2025.07.00 payment method type mappings
+MOOV_PAYMENT_METHOD_TYPES = {
+    "ach-debit-collect": "ach",
+    "ach-debit-fund": "ach",
+    "ach-credit-standard": "ach",
+    "ach-credit-same-day": "ach",
+    "moov-wallet": "wallet",
+    "card-payment": "card",
+    "push-to-card": "debit_card",
+    "pull-from-card": "debit_card",
+    "rtp-credit": "rtp",
+    "card-present-payment": "card",
+    "apple-pay": "card"
+}
+
+
+def normalize_payment_method_type(moov_type: str) -> str:
+    """
+    Normalize Moov's payment method type to our internal storage format.
+    Moov uses types like 'ach-debit-collect', we store as 'ach'.
+    """
+    if not moov_type:
+        return "unknown"
+    return MOOV_PAYMENT_METHOD_TYPES.get(moov_type.lower(), moov_type)
+
+
+def get_moov_payment_method_type(internal_type: str) -> str:
+    """
+    Convert internal type back to Moov's expected format.
+    For transfers, we need the exact Moov enum value.
+    """
+    # Map stored types back to preferred Moov types
+    type_map = {
+        "ach": "ach-debit-fund",
+        "bank_account": "ach-debit-fund",
+        "card": "card-payment",
+        "debit_card": "push-to-card",
+        "rtp": "rtp-credit",
+        "wallet": "moov-wallet"
+    }
+    return type_map.get(internal_type, internal_type)
+
+
+def validate_payment_method_for_transfer(
+    owner_type: str,
+    owner_id: int,
+    payment_method_id: str,
+    transfer_direction: str = "source"
+) -> Tuple[bool, Optional[str]]:
+    """
+    Validate payment method is suitable for a transfer.
+
+    Args:
+        owner_type: 'restaurant' or 'employee'
+        owner_id: ID of the owner
+        payment_method_id: Moov payment method ID
+        transfer_direction: 'source' or 'destination'
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    cursor = _get_cursor(dictionary=True)
+    try:
+        cursor.execute(
+            """
+            SELECT METHOD_TYPE, STATUS, IS_VERIFIED
+            FROM GRATLYDB.PAYMENT_METHODS
+            WHERE OWNER_TYPE = %s AND OWNER_ID = %s AND MOOV_PAYMENT_METHOD_ID = %s
+            LIMIT 1
+            """,
+            (owner_type, owner_id, payment_method_id)
+        )
+        method = cursor.fetchone()
+        if not method:
+            return False, "Payment method not found"
+
+        if method["STATUS"] not in ("active", "verified"):
+            return False, f"Payment method status is {method['STATUS']}"
+
+        if not method["IS_VERIFIED"] and transfer_direction == "source":
+            return False, "Unverified payment methods cannot be used as transfer source"
+
+        return True, None
+    finally:
+        cursor.close()
 
 
 def refresh_payment_methods(owner_type: str, owner_id: int, moov_account_id: str) -> List[Dict[str, Any]]:
@@ -223,7 +438,7 @@ def refresh_payment_methods(owner_type: str, owner_id: int, moov_account_id: str
                     owner_type,
                     owner_id,
                     method_id,
-                    method.get("type") or method.get("methodType") or "unknown",
+                    normalize_payment_method_type(method.get("type") or method.get("methodType") or ""),
                     method.get("brand"),
                     method.get("last4"),
                     method.get("status") or "active",
