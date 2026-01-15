@@ -20,6 +20,8 @@ class BillingConfig(BaseModel):
     billingDate: Optional[int] = None
     billingAmount: Optional[int] = None
     paidStatus: Optional[str] = None
+    moovAccountId: Optional[str] = None
+    onboardingStatus: Optional[str] = None
 
 
 class PaymentMethod(BaseModel):
@@ -99,10 +101,30 @@ def _fetch_billing_config(restaurant_id: int) -> BillingConfig:
         billing_amount = row.get("billing_amount")
         billing_amount_cents = _parse_amount_to_cents(billing_amount)
 
+        # Fetch Moov account info
+        moov_account_id = None
+        onboarding_status = None
+        cursor.execute(
+            """
+            SELECT MOOV_ACCOUNT_ID AS moov_account_id,
+                   ONBOARDING_STATUS AS onboarding_status
+            FROM GRATLYDB.MOOV_ACCOUNTS
+            WHERE ENTITY_ID = %s AND ENTITY_TYPE = 'restaurant'
+            LIMIT 1
+            """,
+            (restaurant_id,),
+        )
+        moov_row = cursor.fetchone()
+        if moov_row:
+            moov_account_id = moov_row.get("moov_account_id")
+            onboarding_status = moov_row.get("onboarding_status")
+
         return BillingConfig(
             billingDate=billing_day,
             billingAmount=billing_amount_cents,
             paidStatus=row.get("paid_status"),
+            moovAccountId=moov_account_id,
+            onboardingStatus=onboarding_status,
         )
     finally:
         cursor.close()
