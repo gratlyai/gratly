@@ -196,8 +196,12 @@ def _build_restaurant_account_payload(restaurant_id: int) -> Dict[str, Any]:
     restaurant_name = _fetch_restaurant_name(restaurant_id) or "Restaurant"
     contact = _fetch_restaurant_contact(restaurant_id)
     return {
-        "type": "business",
-        "profile": {"name": restaurant_name},
+        "accountType": "business",
+        "profile": {
+            "business": {
+                "name": restaurant_name,
+            }
+        },
         "metadata": {"restaurant_id": str(restaurant_id)},
         "contact": {
             "name": contact.get("name") or restaurant_name,
@@ -211,8 +215,12 @@ def _build_restaurant_account_payload(restaurant_id: int) -> Dict[str, Any]:
 def _build_employee_account_payload(user_id: int) -> Dict[str, Any]:
     profile = _fetch_user_profile(user_id)
     return {
-        "type": "individual",
-        "profile": {"name": profile.get("name")},
+        "accountType": "individual",
+        "profile": {
+            "individual": {
+                "name": profile.get("name"),
+            }
+        },
         "metadata": {"user_id": str(user_id)},
         "contact": {
             "name": profile.get("name"),
