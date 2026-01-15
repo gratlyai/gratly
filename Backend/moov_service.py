@@ -61,6 +61,10 @@ def _moov_request(
     if json_body is not None:
         headers["Content-Type"] = "application/json"
         data = json.dumps(json_body).encode("utf-8")
+        # Log the payload for debugging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"Moov API request payload: {json_body}")
     if idempotency_key:
         headers["Idempotency-Key"] = idempotency_key
 

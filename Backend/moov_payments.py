@@ -75,13 +75,22 @@ def _fetch_user_profile(user_id: int) -> Dict[str, Optional[str]]:
             (user_id,),
         )
         row = cursor.fetchone() or {}
-        full_name = " ".join(
-            [part for part in [row.get("first_name"), row.get("last_name")] if part]
-        ).strip()
+
+        # Build full name from first and last name
+        first_name = (row.get("first_name") or "").strip()
+        last_name = (row.get("last_name") or "").strip()
+        full_name = " ".join([part for part in [first_name, last_name] if part]).strip()
+
+        # Get email and ensure it's a string
+        email = (row.get("email") or "").strip()
+
+        # Get phone and ensure it's a string (or None if empty)
+        phone = (row.get("phone") or "").strip()
+
         return {
-            "name": full_name or row.get("email"),
-            "email": row.get("email"),
-            "phone": row.get("phone"),
+            "name": full_name or email or "User",
+            "email": email or None,
+            "phone": phone or None,
         }
     finally:
         cursor.close()
@@ -193,18 +202,20 @@ def _update_transfer_status(moov_transfer_id: str, status: str, failure_reason: 
 
 
 def _build_restaurant_account_payload(restaurant_id: int) -> Dict[str, Any]:
-    restaurant_name = _fetch_restaurant_name(restaurant_id) or "Restaurant"
-    contact = _fetch_restaurant_contact(restaurant_id)
+    restaurant_name = ((_fetch_restaurant_name(restaurant_id) or "Restaurant").strip() or "Restaurant")
+    contact = _fetch_restaurant_contact(restaurant_id) or {}
 
-    # Build contact object, excluding None values (Moov doesn't accept null)
-    contact_obj = {}
-    contact_name = contact.get("name") or restaurant_name
-    if contact_name:
-        contact_obj["name"] = contact_name
-    if contact.get("email"):
-        contact_obj["email"] = contact.get("email")
-    if contact.get("phone"):
-        contact_obj["phone"] = contact.get("phone")
+    # Build contact object, excluding None/empty values (Moov doesn't accept null)
+    contact_name = (contact.get("name") or restaurant_name).strip() or restaurant_name
+    contact_obj = {"name": contact_name}  # Always include name
+
+    contact_email = (contact.get("email") or "").strip()
+    if contact_email:
+        contact_obj["email"] = contact_email
+
+    contact_phone = (contact.get("phone") or "").strip()
+    if contact_phone:
+        contact_obj["phone"] = contact_phone
 
     return {
         "accountType": "business",
@@ -214,7 +225,7 @@ def _build_restaurant_account_payload(restaurant_id: int) -> Dict[str, Any]:
             }
         },
         "metadata": {"restaurant_id": str(restaurant_id)},
-        "contact": contact_obj,  # Only include non-null values
+        "contact": contact_obj,
         "capabilities": ["wallet", "send-funds", "receive-funds", "invoicing"],
     }
 
@@ -222,10 +233,11 @@ def _build_restaurant_account_payload(restaurant_id: int) -> Dict[str, Any]:
 def _build_employee_account_payload(user_id: int) -> Dict[str, Any]:
     profile = _fetch_user_profile(user_id)
 
-    # Build contact object, excluding None values (Moov doesn't accept null)
-    contact = {}
-    if profile.get("name"):
-        contact["name"] = profile.get("name")
+    # Ensure we have a name
+    name = (profile.get("name") or "User").strip()
+
+    # Build contact object, excluding None/empty values (Moov doesn't accept null)
+    contact = {"name": name}  # Always include name
     if profile.get("email"):
         contact["email"] = profile.get("email")
     if profile.get("phone"):
@@ -235,11 +247,11 @@ def _build_employee_account_payload(user_id: int) -> Dict[str, Any]:
         "accountType": "individual",
         "profile": {
             "individual": {
-                "name": profile.get("name") or "Employee",
+                "name": name,
             }
         },
         "metadata": {"user_id": str(user_id)},
-        "contact": contact,  # Only include non-null values
+        "contact": contact,
         "capabilities": ["wallet", "receive-funds"],
     }
 
