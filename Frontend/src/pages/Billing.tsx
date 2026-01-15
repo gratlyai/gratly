@@ -34,9 +34,19 @@ export default function Billing() {
   const [isLoadingInvoices, setIsLoadingInvoices] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // Get restaurant ID from localStorage
+  const restaurantId = Number(localStorage.getItem("restaurantKey") || "0");
+
   useEffect(() => {
+    if (!restaurantId) {
+      setErrorMessage("Restaurant ID not found. Please log in again.");
+      setIsLoadingSummary(false);
+      setIsLoadingInvoices(false);
+      return;
+    }
+
     setIsLoadingSummary(true);
-    fetchBillingSummary(0)
+    fetchBillingSummary(restaurantId)
       .then((data) => {
         setSummary(data);
       })
@@ -44,25 +54,23 @@ export default function Billing() {
         setErrorMessage(error instanceof Error ? error.message : "Failed to load billing summary.");
       })
       .finally(() => setIsLoadingSummary(false));
-  }, []);
+  }, [restaurantId]);
 
   useEffect(() => {
+    if (!restaurantId) {
+      return;
+    }
+
     setIsLoadingInvoices(true);
-    fetchInvoices(10)
+    fetchInvoices(restaurantId, 50) // Fetch 50 invoices per page
       .then((data: any) => {
-        if (Array.isArray(data)) {
-          setInvoices(data);
-        } else if (data && typeof data === 'object' && 'invoices' in data) {
-          setInvoices(Array.isArray(data.invoices) ? data.invoices : []);
-        } else {
-          setInvoices([]);
-        }
+        setInvoices(Array.isArray(data) ? data : []);
       })
       .catch((error) => {
         setErrorMessage(error instanceof Error ? error.message : "Failed to load invoices.");
       })
       .finally(() => setIsLoadingInvoices(false));
-  }, []);
+  }, [restaurantId]);
 
   return (
     <div className="mx-auto w-full max-w-6xl px-6 py-10">
@@ -125,14 +133,16 @@ export default function Billing() {
                   {invoices.map((invoice) => (
                     <tr key={invoice.id}>
                       <td className="px-4 py-3 font-semibold text-gray-900">
-                        {invoice.number ?? invoice.id}
-                      </td>
-                      <td className="px-4 py-3 text-gray-700">{invoice.status}</td>
-                      <td className="px-4 py-3 text-gray-700">
-                        {formatCurrency(invoice.amountDue, invoice.currency)}
+                        {invoice.billingPeriod ?? `Invoice ${invoice.id}`}
                       </td>
                       <td className="px-4 py-3 text-gray-700">
-                        {formatDate(invoice.created)}
+                        {invoice.paymentStatus ?? invoice.moovInvoiceStatus ?? "—"}
+                      </td>
+                      <td className="px-4 py-3 text-gray-700">
+                        {formatCurrency(invoice.amountCents, invoice.currency)}
+                      </td>
+                      <td className="px-4 py-3 text-gray-700">
+                        {formatDate(invoice.createdAt)}
                       </td>
                     </tr>
                   ))}
