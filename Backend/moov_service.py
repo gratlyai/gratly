@@ -3,6 +3,7 @@ import json
 import os
 import urllib.parse
 import urllib.request
+import base64
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
@@ -29,8 +30,14 @@ def _moov_base_url() -> str:
 
 
 def _moov_auth_header() -> str:
-    token = _get_required_env("MOOV_API_KEY")
-    return f"Bearer {token}"
+    """Generate Basic Auth header for Moov API using public and secret keys."""
+    public_key = _get_required_env("MOOV_PUBLIC_KEY")
+    secret_key = _get_required_env("MOOV_SECRET_KEY")
+
+    # Combine keys as "public_key:secret_key" and base64 encode
+    credentials = f"{public_key}:{secret_key}"
+    encoded = base64.b64encode(credentials.encode()).decode()
+    return f"Basic {encoded}"
 
 
 def _moov_request(
