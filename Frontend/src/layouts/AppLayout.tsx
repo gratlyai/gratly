@@ -89,7 +89,8 @@ const AppLayout: React.FC = () => {
   const [isRestaurantOptionsLoading, setIsRestaurantOptionsLoading] = useState<boolean>(false);
   const [isRestaurantSaving, setIsRestaurantSaving] = useState<boolean>(false);
   const [restaurantSelectionError, setRestaurantSelectionError] = useState<string | null>(null);
-  const showRestaurantSelector = isSuperAdmin || permissions.adminAccess;
+  // Show dropdown only if admin has multiple restaurants to choose from
+  const showRestaurantSelector = (isSuperAdmin || permissions.adminAccess) && restaurantOptions.length > 1;
 
   useEffect(() => {
     let isMounted = true;
