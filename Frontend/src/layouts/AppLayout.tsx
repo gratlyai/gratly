@@ -81,12 +81,6 @@ const AppLayout: React.FC = () => {
   const [permissionsLoaded, setPermissionsLoaded] = useState<boolean>(false);
   const isAdminUser = permissions.adminAccess || permissions.superadminAccess;
   const isSuperAdmin = permissions.superadminAccess;
-  const isBusinessUser =
-    isAdminUser ||
-    permissions.managerAccess ||
-    permissions.createPayoutSchedules ||
-    permissions.approvePayouts ||
-    permissions.manageTeam;
   const basePath = `/${activeUserSlug}`;
   const isCompactSidebar = isSidebarCollapsed && !isSidebarHovered;
   const outletKey = activeUserSlug ?? "default";
@@ -239,7 +233,7 @@ const AppLayout: React.FC = () => {
       setRestaurantSelectionError("Selected restaurant is unavailable.");
       return;
     }
-    const currentRestaurantId = restaurantKey || storedRestaurantKey;
+    const currentRestaurantId = selectedRestaurantId;
     if (
       currentRestaurantId &&
       selectedOption.restaurantId &&
@@ -263,7 +257,8 @@ const AppLayout: React.FC = () => {
       if (!result.restaurantId) {
         throw new Error("Restaurant selection did not return an ID.");
       }
-      localStorage.setItem("restaurantKey", String(result.restaurantId));
+      localStorage.setItem("selectedRestaurantId", String(result.restaurantId));
+      localStorage.setItem("restaurantKey", String(result.restaurantId)); // Keep for compatibility
       if (resolvedName) {
         localStorage.setItem("restaurantName", resolvedName);
       } else {
@@ -288,13 +283,6 @@ const AppLayout: React.FC = () => {
       } catch (error) {
         console.warn("Failed to refresh permissions:", error);
       }
-      const nextBase = `/business/${result.restaurantId}`;
-      const currentBase = restaurantKey ? `/business/${restaurantKey}` : "";
-      const nextPath =
-        restaurantKey && location.pathname.startsWith(currentBase)
-          ? location.pathname.replace(currentBase, nextBase)
-          : `${nextBase}/home`;
-      navigate(nextPath, { replace: true });
     } catch (error) {
       setRestaurantSelectionError(
         error instanceof Error ? error.message : "Failed to assign restaurant.",
