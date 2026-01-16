@@ -1828,32 +1828,21 @@ def list_restaurant_selection_options(user_id: int):
     cursor = _get_cursor(dictionary=True)
     try:
         if not is_superadmin:
-            cursor.execute(
-                """
-                SELECT 1
-                FROM GRATLYDB.USERRESTAURANT
-                WHERE USERID = %s
-                  AND RESTAURANTID IS NOT NULL
-                LIMIT 1
-                """,
-                (user_id,),
-            )
-            if cursor.fetchone():
-                return []
+            # For regular admins, return restaurants they have access to from USERRESTAURANT
             cursor.execute(
                 """
                 SELECT
-                    ob.RESTAURANTID AS restaurant_id,
+                    ur.RESTAURANTID AS restaurant_id,
                     rd.RESTAURANTGUID AS restaurant_guid,
                     rd.RESTAURANTNAME AS restaurant_name
-                FROM GRATLYDB.SRC_ONBOARDING ob
-                LEFT JOIN GRATLYDB.SRC_RESTAURANTDETAILS rd
-                    ON rd.RESTAURANTGUID = ob.RESTAURANTGUID
-                LEFT JOIN GRATLYDB.USERRESTAURANT ur
-                    ON ur.RESTAURANTID = ob.RESTAURANTID
-                WHERE ur.RESTAURANTID IS NULL
-                ORDER BY rd.RESTAURANTNAME, ob.RESTAURANTID
-                """
+                FROM GRATLYDB.USERRESTAURANT ur
+                JOIN GRATLYDB.SRC_ONBOARDING ob ON ur.RESTAURANTID = ob.RESTAURANTID
+                LEFT JOIN GRATLYDB.SRC_RESTAURANTDETAILS rd ON rd.RESTAURANTGUID = ob.RESTAURANTGUID
+                WHERE ur.USERID = %s
+                  AND ur.RESTAURANTID IS NOT NULL
+                ORDER BY rd.RESTAURANTNAME, ur.RESTAURANTID
+                """,
+                (user_id,),
             )
         else:
             cursor.execute(
