@@ -328,6 +328,9 @@ def _fetch_moov_account(owner_type: str, owner_id: int) -> Optional[str]:
 
 
 def ensure_moov_account(owner_type: str, owner_id: int, payload: Dict[str, Any]) -> str:
+    import logging
+    logger = logging.getLogger(__name__)
+
     existing = _fetch_moov_account(owner_type, owner_id)
     if existing:
         return existing
@@ -352,6 +355,15 @@ def ensure_moov_account(owner_type: str, owner_id: int, payload: Dict[str, Any])
             response.get("verification", {}).get("status"),
             response.get("capabilities")
         )
+
+        # Attach default fee plan to restaurant accounts
+        if owner_type == "restaurant":
+            try:
+                attach_fee_plan_agreement(account_id)
+                logger.info(f"Attached default fee plan to restaurant account {account_id}")
+            except Exception as e:
+                logger.warning(f"Failed to attach fee plan to account {account_id}: {e}")
+                # Don't fail - fee plan can be attached manually later
 
         return {"account_id": account_id}
 
@@ -413,76 +425,72 @@ def verify_account_capabilities(
         return False, f"Cannot verify capabilities: {e.detail}"
 
 
-def _get_available_fee_plans() -> List[str]:
+def _get_default_fee_plan_id() -> str:
     """
-    Fetch available fee plan codes from the platform account.
+    Get the default fee plan ID to attach to new accounts.
 
-    Returns a list of fee plan codes. Tries multiple approaches:
-    1. Fetch from platform account details
-    2. Query fee plan catalog endpoint
-    3. Return empty list if all fail (will get clear error from Moov)
+    Fee plans are created in the Moov dashboard and referenced by planID.
+    The planID is set via MOOV_DEFAULT_FEE_PLAN environment variable.
+
+    Example: efbc6f5e-6573-4f8a-a93b-dd5dcce298f9
     """
     import logging
     logger = logging.getLogger(__name__)
 
-    try:
-        platform_account_id = _get_platform_account_id()
-        logger.info(f"Fetching fee plans for platform account {platform_account_id}")
+    # Get fee plan ID from environment variable
+    fee_plan_id = os.getenv("MOOV_DEFAULT_FEE_PLAN")
 
-        # Approach 1: Fetch the platform account details which may include fee plans
-        try:
-            account = fetch_account(platform_account_id)
+    if not fee_plan_id:
+        logger.error("MOOV_DEFAULT_FEE_PLAN environment variable not set")
+        raise HTTPException(
+            status_code=500,
+            detail="Fee plan not configured. Set MOOV_DEFAULT_FEE_PLAN environment variable to the fee plan ID."
+        )
 
-            # Look for fee plans in the account response
-            fee_plans = account.get("feePlans", [])
+    logger.info(f"Using fee plan ID: {fee_plan_id}")
+    return fee_plan_id
 
-            if isinstance(fee_plans, list) and len(fee_plans) > 0:
-                # Extract fee plan codes
-                fee_plan_codes = []
-                for plan in fee_plans:
-                    if isinstance(plan, dict) and "code" in plan:
-                        fee_plan_codes.append(plan["code"])
-                    elif isinstance(plan, str):
-                        fee_plan_codes.append(plan)
 
-                if fee_plan_codes:
-                    logger.info(f"Found {len(fee_plan_codes)} fee plans from account: {fee_plan_codes}")
-                    return fee_plan_codes
+def attach_fee_plan_agreement(moov_account_id: str, fee_plan_id: Optional[str] = None) -> str:
+    """
+    Attach a fee plan agreement to an account.
 
-            # Check alternate field names
-            fee_plan_codes = account.get("feePlanCodes", [])
-            if isinstance(fee_plan_codes, list) and len(fee_plan_codes) > 0:
-                logger.info(f"Found {len(fee_plan_codes)} fee plan codes from account: {fee_plan_codes}")
-                return fee_plan_codes
-        except Exception as e:
-            logger.debug(f"Could not fetch from account details: {e}")
+    Uses the Moov fee-plan-agreements endpoint to attach a fee plan to an account.
+    The account must already exist in Moov.
 
-        # Approach 2: Try to query fee plan catalog endpoint
-        try:
-            logger.info("Trying fee plan catalog endpoint...")
-            catalog = _moov_request("GET", "/fee-plans")
+    Args:
+        moov_account_id: The Moov account ID to attach the fee plan to
+        fee_plan_id: Optional fee plan ID. If not provided, uses default from env.
 
-            fee_plans = catalog.get("feePlans", [])
-            if isinstance(fee_plans, list) and len(fee_plans) > 0:
-                fee_plan_codes = []
-                for plan in fee_plans:
-                    if isinstance(plan, dict) and "code" in plan:
-                        fee_plan_codes.append(plan["code"])
-                    elif isinstance(plan, str):
-                        fee_plan_codes.append(plan)
+    Returns:
+        The agreement ID of the created fee plan agreement
+    """
+    import logging
+    logger = logging.getLogger(__name__)
 
-                if fee_plan_codes:
-                    logger.info(f"Found {len(fee_plan_codes)} fee plans from catalog: {fee_plan_codes}")
-                    return fee_plan_codes
-        except Exception as e:
-            logger.debug(f"Could not fetch from fee plan catalog: {e}")
+    if not fee_plan_id:
+        fee_plan_id = _get_default_fee_plan_id()
 
-        logger.warning(f"No fee plans found - will attempt onboarding without feePlanCodes")
-        return []
+    payload = {
+        "planID": fee_plan_id,
+    }
 
-    except Exception as e:
-        logger.warning(f"Failed to fetch fee plans: {e}")
-        return []
+    logger.info(f"Attaching fee plan {fee_plan_id} to account {moov_account_id}")
+    response = _moov_request_with_retry(
+        "POST",
+        f"/accounts/{moov_account_id}/fee-plan-agreements",
+        json_body=payload,
+        idempotency_key=f"moov-fee-agreement-{moov_account_id}-{fee_plan_id}",
+    )
+
+    agreement_id = response.get("agreementID") or response.get("id")
+    if not agreement_id:
+        logger.error(f"Fee plan agreement ID missing from response: {response}")
+        # Don't fail - fee plan can be attached manually later
+        return ""
+
+    logger.info(f"Successfully attached fee plan agreement: {agreement_id}")
+    return agreement_id
 
 
 def create_onboarding_link(
@@ -495,23 +503,16 @@ def create_onboarding_link(
 
     This uses the Moov onboarding-invites endpoint which creates a link
     for the account holder to complete KYC/KYB verification.
+
+    Note: Fee plans are attached separately via attach_fee_plan_agreement()
+    after the account is created.
     """
     import logging
     logger = logging.getLogger(__name__)
 
-    # Get available fee plans from platform account
-    # feePlanCodes is a required field and cannot be empty
-    fee_plans = _get_available_fee_plans()
-
-    if not fee_plans:
-        logger.warning("No fee plans available from platform account - onboarding may fail")
-        # Moov API will return clear error if feePlanCodes is empty
-        # This is better than silently failing with a generic error
-
     payload = {
         # Required fields for onboarding-invites endpoint
         "capabilities": ["wallet", "send-funds", "collect-funds"],
-        "feePlanCodes": fee_plans,  # Must have at least one fee plan code
         "scopes": ["accounts.write", "accounts.read"],  # Standard scopes for account management
         # Optional fields
         "returnURL": return_url,
@@ -521,7 +522,7 @@ def create_onboarding_link(
         }
     }
 
-    logger.info(f"Creating onboarding invite for account {moov_account_id} with fee plans: {fee_plans}")
+    logger.info(f"Creating onboarding invite for account {moov_account_id}")
     response = _moov_request(
         "POST",
         "/onboarding-invites",
