@@ -241,7 +241,10 @@ def _build_restaurant_account_payload(restaurant_id: int) -> Dict[str, Any]:
         },
         "metadata": {"restaurant_id": str(restaurant_id)},
         "contact": contact_obj,
-        "capabilities": ["wallet", "send-funds", "receive-funds", "invoicing"],
+        "capabilities": ["wallet", "send-funds", "collect-funds"],
+        "termsOfService": {
+            "token": "moov-tos"  # Platform acceptance token for requested capabilities
+        }
     }
 
 
@@ -275,7 +278,10 @@ def _build_employee_account_payload(user_id: int) -> Dict[str, Any]:
         },
         "metadata": {"user_id": str(user_id)},
         "contact": contact,
-        "capabilities": ["wallet", "receive-funds"],
+        "capabilities": ["wallet", "transfers"],
+        "termsOfService": {
+            "token": "moov-tos"  # Platform acceptance token for requested capabilities
+        }
     }
 
 
