@@ -62,6 +62,8 @@ const GratlyFormsSystem: React.FC = () => {
   const [jobTitlesError, setJobTitlesError] = useState<string>('');
   const [editingScheduleId, setEditingScheduleId] = useState<number | null>(null);
   const [restaurantKey, setRestaurantKey] = useState<string>('');
+  const [expandedScheduleDetails, setExpandedScheduleDetails] = useState<Record<number, any>>({});
+  const [loadingExpandedScheduleDetails, setLoadingExpandedScheduleDetails] = useState<Record<number, boolean>>({});
   // Form creation states
   const [formName, setFormName] = useState<string>('');
   const [startDate, setStartDate] = useState<string>('');
@@ -456,8 +458,29 @@ const GratlyFormsSystem: React.FC = () => {
     }
   };
 
-  const toggleScheduleExpanded = (scheduleId: number) => {
+  const toggleScheduleExpanded = async (scheduleId: number) => {
+    const isCurrentlyExpanded = expandedScheduleId === scheduleId;
     setExpandedScheduleId((prev) => (prev === scheduleId ? null : scheduleId));
+
+    // Fetch details if expanding and not already loaded
+    if (!isCurrentlyExpanded && !expandedScheduleDetails[scheduleId]) {
+      setLoadingExpandedScheduleDetails({ ...loadingExpandedScheduleDetails, [scheduleId]: true });
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/payout-schedules/${scheduleId}?user_id=${userId}`,
+          { headers: { 'Content-Type': 'application/json' } }
+        );
+        if (!response.ok) {
+          throw new Error('Failed to load schedule details');
+        }
+        const data = await response.json();
+        setExpandedScheduleDetails({ ...expandedScheduleDetails, [scheduleId]: data });
+      } catch (error) {
+        console.error('Failed to load schedule details:', error);
+      } finally {
+        setLoadingExpandedScheduleDetails({ ...loadingExpandedScheduleDetails, [scheduleId]: false });
+      }
+    }
   };
 
   const handleDeleteSchedule = async () => {
@@ -798,17 +821,114 @@ const GratlyFormsSystem: React.FC = () => {
                       <span className="text-lg font-semibold text-gray-400">{isExpanded ? '-' : '+'}</span>
                     </div>
                     {isExpanded ? (
-                      <div className="border-t border-gray-200 px-5 py-4 flex flex-wrap items-center justify-between gap-3">
-                        <p className="text-sm text-gray-600">
-                          Review this schedule or open it to edit payout settings.
-                        </p>
-                        <button
-                          type="button"
-                          onClick={() => loadScheduleDetails(schedule.payout_schedule_id)}
-                          className="bg-[#cab99a] text-black px-4 py-2 rounded-lg text-sm font-semibold hover:bg-[#bfa986] transition-all"
-                        >
-                          Edit Schedule
-                        </button>
+                      <div className="border-t border-gray-200 px-5 py-4 space-y-4">
+                        {loadingExpandedScheduleDetails[schedule.payout_schedule_id] ? (
+                          <div className="text-center py-8">
+                            <p className="text-sm text-gray-600">Loading schedule details...</p>
+                          </div>
+                        ) : expandedScheduleDetails[schedule.payout_schedule_id] ? (
+                          <>
+                            {/* Payout Triggers Section */}
+                            {expandedScheduleDetails[schedule.payout_schedule_id]?.payout_triggers && (
+                              <div className="border-b border-gray-100 pb-4">
+                                <h4 className="font-semibold text-gray-700 mb-3">Payout Triggers</h4>
+                                <div className="grid grid-cols-2 gap-4">
+                                  <div className="text-sm">
+                                    <span className="font-medium text-gray-600">Gratuity:</span>{' '}
+                                    <span className="text-gray-900">
+                                      {expandedScheduleDetails[schedule.payout_schedule_id].payout_triggers.gratuity ?? 'N/A'}%
+                                    </span>
+                                  </div>
+                                  <div className="text-sm">
+                                    <span className="font-medium text-gray-600">Tips:</span>{' '}
+                                    <span className="text-gray-900">
+                                      {expandedScheduleDetails[schedule.payout_schedule_id].payout_triggers.tips ?? 'N/A'}%
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Contributors Section */}
+                            {expandedScheduleDetails[schedule.payout_schedule_id]?.payout_receivers?.some(
+                              (r: any) => r.contributor_receiver === 1
+                            ) && (
+                              <div className="border-b border-gray-100 pb-4">
+                                <h4 className="font-semibold text-gray-700 mb-3">Contributors</h4>
+                                <div className="flex flex-wrap gap-2">
+                                  {expandedScheduleDetails[schedule.payout_schedule_id].payout_receivers
+                                    .filter((r: any) => r.contributor_receiver === 1)
+                                    .map((receiver: any, idx: number) => (
+                                      <span
+                                        key={idx}
+                                        className="px-3 py-1 bg-gray-100 rounded-full text-sm text-gray-700 font-medium"
+                                      >
+                                        {receiver.payout_receiver_id}
+                                      </span>
+                                    ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Receivers & Percentages Section */}
+                            {expandedScheduleDetails[schedule.payout_schedule_id]?.payout_receivers?.some(
+                              (r: any) => r.contributor_receiver === 0
+                            ) && (
+                              <div className="border-b border-gray-100 pb-4">
+                                <h4 className="font-semibold text-gray-700 mb-3">Receivers & Percentages</h4>
+                                <div className="space-y-2">
+                                  {expandedScheduleDetails[schedule.payout_schedule_id].payout_receivers
+                                    .filter((r: any) => r.contributor_receiver === 0)
+                                    .map((receiver: any, idx: number) => (
+                                      <div key={idx} className="flex justify-between text-sm">
+                                        <span className="text-gray-700">{receiver.payout_receiver_id}</span>
+                                        <span className="font-semibold text-gray-900">
+                                          {receiver.payout_percentage !== null ? `${receiver.payout_percentage}%` : 'N/A'}
+                                        </span>
+                                      </div>
+                                    ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Pre-Payout Entries Section */}
+                            {expandedScheduleDetails[schedule.payout_schedule_id]?.pre_payouts &&
+                              expandedScheduleDetails[schedule.payout_schedule_id].pre_payouts.length > 0 && (
+                                <div className="border-b border-gray-100 pb-4">
+                                  <h4 className="font-semibold text-gray-700 mb-3">Pre-Payout Entries</h4>
+                                  <div className="space-y-2">
+                                    {expandedScheduleDetails[schedule.payout_schedule_id].pre_payouts.map(
+                                      (prePayout: any, idx: number) => (
+                                        <div key={idx} className="flex justify-between text-sm">
+                                          <span className="text-gray-700">{prePayout.user_account || 'Unknown'}</span>
+                                          <span className="font-semibold text-gray-900">
+                                            {prePayout.pre_payout_option === 0
+                                              ? `$${prePayout.pre_payout_value}`
+                                              : `${prePayout.pre_payout_value}%`}
+                                          </span>
+                                        </div>
+                                      )
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+
+                            {/* Edit Schedule Button */}
+                            <div className="flex justify-end pt-4">
+                              <button
+                                type="button"
+                                onClick={() => loadScheduleDetails(schedule.payout_schedule_id)}
+                                className="bg-[#cab99a] text-black px-6 py-2 rounded-lg text-sm font-semibold hover:bg-[#bfa986] transition-all"
+                              >
+                                Edit Schedule
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="text-center py-8">
+                            <p className="text-sm text-red-600">Failed to load schedule details</p>
+                          </div>
+                        )}
                       </div>
                     ) : null}
                   </div>
