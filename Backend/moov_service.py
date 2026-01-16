@@ -413,6 +413,55 @@ def verify_account_capabilities(
         return False, f"Cannot verify capabilities: {e.detail}"
 
 
+def _get_available_fee_plans() -> List[str]:
+    """
+    Fetch available fee plan codes from the platform account.
+
+    Returns a list of fee plan codes. If fetch fails, returns a default empty list
+    which may cause the onboarding request to fail with a clear error.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    try:
+        platform_account_id = _get_platform_account_id()
+        logger.info(f"Fetching fee plans for platform account {platform_account_id}")
+
+        # Fetch the platform account details which should include fee plans
+        account = fetch_account(platform_account_id)
+
+        # Look for fee plans in the account response
+        # Moov API returns fee plan codes in the account details
+        fee_plans = account.get("feePlans", [])
+
+        if isinstance(fee_plans, list) and len(fee_plans) > 0:
+            # Extract fee plan codes
+            fee_plan_codes = []
+            for plan in fee_plans:
+                if isinstance(plan, dict) and "code" in plan:
+                    fee_plan_codes.append(plan["code"])
+                elif isinstance(plan, str):
+                    fee_plan_codes.append(plan)
+
+            if fee_plan_codes:
+                logger.info(f"Found {len(fee_plan_codes)} fee plans: {fee_plan_codes}")
+                return fee_plan_codes
+
+        # If no fee plans found, check alternate field names
+        fee_plan_codes = account.get("feePlanCodes", [])
+        if isinstance(fee_plan_codes, list) and len(fee_plan_codes) > 0:
+            logger.info(f"Found {len(fee_plan_codes)} fee plan codes: {fee_plan_codes}")
+            return fee_plan_codes
+
+        logger.warning(f"No fee plans found in platform account {platform_account_id}")
+        return []
+
+    except Exception as e:
+        logger.warning(f"Failed to fetch fee plans from platform account: {e}")
+        # Return empty list - the onboarding request will fail with clear Moov error
+        return []
+
+
 def create_onboarding_link(
     moov_account_id: str,
     return_url: str,
@@ -427,10 +476,19 @@ def create_onboarding_link(
     import logging
     logger = logging.getLogger(__name__)
 
+    # Get available fee plans from platform account
+    # feePlanCodes is a required field and cannot be empty
+    fee_plans = _get_available_fee_plans()
+
+    if not fee_plans:
+        logger.warning("No fee plans available from platform account - onboarding may fail")
+        # Moov API will return clear error if feePlanCodes is empty
+        # This is better than silently failing with a generic error
+
     payload = {
         # Required fields for onboarding-invites endpoint
         "capabilities": ["wallet", "send-funds", "collect-funds"],
-        "feePlanCodes": [],  # Empty if no specific fee plan
+        "feePlanCodes": fee_plans,  # Must have at least one fee plan code
         "scopes": ["accounts.write", "accounts.read"],  # Standard scopes for account management
         # Optional fields
         "returnURL": return_url,
@@ -440,7 +498,7 @@ def create_onboarding_link(
         }
     }
 
-    logger.info(f"Creating onboarding invite for account {moov_account_id}")
+    logger.info(f"Creating onboarding invite for account {moov_account_id} with fee plans: {fee_plans}")
     response = _moov_request(
         "POST",
         "/onboarding-invites",
