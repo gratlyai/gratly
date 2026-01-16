@@ -182,6 +182,41 @@ def fetch_account(moov_account_id: str) -> Dict[str, Any]:
     return _moov_request("GET", f"/accounts/{moov_account_id}")
 
 
+def set_platform_branding() -> None:
+    """
+    Set Gratly branding colors on the Moov platform account.
+
+    Gratly brand colors:
+    - Primary: #cab99a (warm beige/tan)
+    - Dark mode accent: #2c2d2d (dark gray)
+    - Light mode accent: #f4f2ee (off-white/cream)
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    platform_account_id = _get_platform_account_id()
+
+    payload = {
+        "colors": {
+            "dark": {"accent": "#2c2d2d"},      # Dark gray for dark mode
+            "light": {"accent": "#f4f2ee"}      # Off-white for light mode
+        }
+    }
+
+    try:
+        logger.info(f"Setting Gratly branding on platform account {platform_account_id}")
+        response = _moov_request_with_retry(
+            "POST",
+            f"/accounts/{platform_account_id}/branding",
+            json_body=payload,
+            idempotency_key=f"moov-branding-{platform_account_id}",
+        )
+        logger.info(f"Successfully set platform branding: {response}")
+    except Exception as e:
+        logger.warning(f"Failed to set platform branding: {e}")
+        # Don't fail startup if branding can't be set
+
+
 def _store_moov_account(owner_type: str, owner_id: int, moov_account_id: str) -> None:
     import logging
     logger = logging.getLogger(__name__)

@@ -268,6 +268,17 @@ def _run_startup_migrations() -> None:
         logger.error(f"[SCHEDULER ERROR] Failed to initialize scheduler: {e}", exc_info=True)
         import traceback
         traceback.print_exc()
+
+    # Set Gratly branding on Moov platform account
+    try:
+        from moov_service import set_platform_branding
+        logger.info("[BRANDING] Setting Gratly branding colors on Moov platform...")
+        set_platform_branding()
+        logger.info("[BRANDING] Branding initialized successfully")
+    except Exception as e:
+        logger.warning(f"[BRANDING] Failed to set platform branding: {e}")
+        # Don't fail startup if branding can't be set
+
     logger.info("=== APP STARTUP SEQUENCE COMPLETED ===")
 
 @app.on_event("shutdown")
