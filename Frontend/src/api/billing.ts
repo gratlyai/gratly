@@ -4,6 +4,8 @@ export type BillingConfig = {
   billingDate: number | null;
   billingAmount: number | null;
   paidStatus: string | null;
+  moovAccountId: string | null;
+  onboardingStatus: string | null;
 };
 
 export type PaymentMethod = {

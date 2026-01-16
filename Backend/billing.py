@@ -101,23 +101,29 @@ def _fetch_billing_config(restaurant_id: int) -> BillingConfig:
         billing_amount = row.get("billing_amount")
         billing_amount_cents = _parse_amount_to_cents(billing_amount)
 
-        # Fetch Moov account info
+        # Fetch Moov account info (graceful fallback if query fails)
         moov_account_id = None
         onboarding_status = None
-        cursor.execute(
-            """
-            SELECT MOOV_ACCOUNT_ID AS moov_account_id,
-                   ONBOARDING_STATUS AS onboarding_status
-            FROM GRATLYDB.MOOV_ACCOUNTS
-            WHERE ENTITY_ID = %s AND ENTITY_TYPE = 'restaurant'
-            LIMIT 1
-            """,
-            (restaurant_id,),
-        )
-        moov_row = cursor.fetchone()
-        if moov_row:
-            moov_account_id = moov_row.get("moov_account_id")
-            onboarding_status = moov_row.get("onboarding_status")
+        try:
+            cursor.execute(
+                """
+                SELECT MOOV_ACCOUNT_ID AS moov_account_id,
+                       ONBOARDING_STATUS AS onboarding_status
+                FROM GRATLYDB.MOOV_ACCOUNTS
+                WHERE ENTITY_ID = %s AND ENTITY_TYPE = 'restaurant'
+                LIMIT 1
+                """,
+                (restaurant_id,),
+            )
+            moov_row = cursor.fetchone()
+            if moov_row:
+                moov_account_id = moov_row.get("moov_account_id")
+                onboarding_status = moov_row.get("onboarding_status")
+        except Exception as e:
+            # Log error but don't fail the entire endpoint
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to fetch Moov account info for restaurant {restaurant_id}: {e}")
 
         return BillingConfig(
             billingDate=billing_day,
