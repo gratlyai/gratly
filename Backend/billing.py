@@ -76,36 +76,39 @@ def _parse_amount_to_cents(value: Optional[str]) -> Optional[int]:
 
 
 def _fetch_billing_config(restaurant_id: int) -> BillingConfig:
+    import logging
+    logger = logging.getLogger(__name__)
+
     cursor = _get_cursor(dictionary=True)
     try:
-        # Fetch billing info from SRC_ONBOARDING
-        cursor.execute(
-            """
-            SELECT BILLING_DATE AS billing_date,
-                   BILLING_AMOUNT AS billing_amount
-            FROM GRATLYDB.SRC_ONBOARDING
-            WHERE RESTAURANTID = %s
-            LIMIT 1
-            """,
-            (restaurant_id,),
-        )
-        row = cursor.fetchone() or {}
-        billing_date_str = row.get("billing_date")
+        # Try to fetch billing info from SRC_ONBOARDING with graceful fallback
         billing_day = None
-        if billing_date_str:
-            try:
-                # BILLING_DATE is stored as DATE, convert to day of month
-                from datetime import datetime as dt
-                if isinstance(billing_date_str, str):
-                    billing_date = dt.strptime(billing_date_str, "%Y-%m-%d")
-                else:
-                    billing_date = billing_date_str
-                billing_day = billing_date.day
-            except (TypeError, ValueError):
-                pass
+        billing_amount_cents = None
 
-        billing_amount = row.get("billing_amount")
-        billing_amount_cents = _parse_amount_to_cents(billing_amount)
+        try:
+            cursor.execute(
+                """
+                SELECT RESTAURANTID
+                FROM GRATLYDB.SRC_ONBOARDING
+                WHERE RESTAURANTID = %s
+                LIMIT 1
+                """,
+                (restaurant_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                logger.info(f"No SRC_ONBOARDING record found for restaurant {restaurant_id}")
+                # Record doesn't exist, return empty config
+                return BillingConfig(
+                    billingDate=None,
+                    billingAmount=None,
+                    paidStatus=None,
+                    moovAccountId=None,
+                    onboardingStatus=None,
+                )
+        except Exception as e:
+            logger.warning(f"Failed to query SRC_ONBOARDING for restaurant {restaurant_id}: {e}")
+            # Table might not exist or have different schema, continue gracefully
 
         # Fetch Moov account info (graceful fallback if query fails)
         moov_account_id = None
@@ -125,18 +128,27 @@ def _fetch_billing_config(restaurant_id: int) -> BillingConfig:
             if moov_row:
                 moov_account_id = moov_row.get("moov_account_id")
                 onboarding_status = moov_row.get("onboarding_status")
+                logger.info(f"Found Moov account {moov_account_id} for restaurant {restaurant_id}")
         except Exception as e:
             # Log error but don't fail the entire endpoint
-            import logging
-            logger = logging.getLogger(__name__)
             logger.warning(f"Failed to fetch Moov account info for restaurant {restaurant_id}: {e}")
 
         return BillingConfig(
             billingDate=billing_day,
             billingAmount=billing_amount_cents,
-            paidStatus=None,  # PAID_STATUS column doesn't exist in SRC_ONBOARDING
+            paidStatus=None,
             moovAccountId=moov_account_id,
             onboardingStatus=onboarding_status,
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error in _fetch_billing_config: {e}", exc_info=True)
+        # Return empty config on any unexpected error
+        return BillingConfig(
+            billingDate=None,
+            billingAmount=None,
+            paidStatus=None,
+            moovAccountId=None,
+            onboardingStatus=None,
         )
     finally:
         cursor.close()
