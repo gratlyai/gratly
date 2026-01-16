@@ -182,6 +182,28 @@ def fetch_account(moov_account_id: str) -> Dict[str, Any]:
     return _moov_request("GET", f"/accounts/{moov_account_id}")
 
 
+def get_platform_branding() -> Optional[Dict[str, Any]]:
+    """
+    Get current branding colors for the Moov platform account.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    platform_account_id = _get_platform_account_id()
+
+    try:
+        logger.info(f"Fetching current branding for platform account {platform_account_id}")
+        response = _moov_request(
+            "GET",
+            f"/accounts/{platform_account_id}/branding",
+        )
+        logger.info(f"Current platform branding: {response}")
+        return response
+    except Exception as e:
+        logger.warning(f"Failed to get platform branding: {e}")
+        return None
+
+
 def set_platform_branding() -> None:
     """
     Set Gratly branding colors on the Moov platform account.
@@ -196,6 +218,10 @@ def set_platform_branding() -> None:
 
     platform_account_id = _get_platform_account_id()
 
+    # First, check what's currently set
+    current = get_platform_branding()
+    logger.info(f"Current branding before update: {current}")
+
     payload = {
         "colors": {
             "dark": {"accent": "#2c2d2d"},      # Dark gray for dark mode
@@ -204,17 +230,32 @@ def set_platform_branding() -> None:
     }
 
     try:
-        logger.info(f"Setting Gratly branding on platform account {platform_account_id}")
+        # Try PUT first (full replacement)
+        logger.info(f"Setting Gratly branding on platform account {platform_account_id} using PUT")
         response = _moov_request_with_retry(
-            "POST",
+            "PUT",
             f"/accounts/{platform_account_id}/branding",
             json_body=payload,
             idempotency_key=f"moov-branding-{platform_account_id}",
         )
         logger.info(f"Successfully set platform branding: {response}")
+
+        # Verify it was set
+        verify = get_platform_branding()
+        logger.info(f"Branding after update: {verify}")
     except Exception as e:
-        logger.warning(f"Failed to set platform branding: {e}")
-        # Don't fail startup if branding can't be set
+        logger.warning(f"PUT failed, trying POST: {e}")
+        try:
+            # Fallback to POST
+            response = _moov_request_with_retry(
+                "POST",
+                f"/accounts/{platform_account_id}/branding",
+                json_body=payload,
+                idempotency_key=f"moov-branding-{platform_account_id}",
+            )
+            logger.info(f"Successfully set platform branding via POST: {response}")
+        except Exception as e2:
+            logger.warning(f"Failed to set platform branding: {e2}")
 
 
 def _store_moov_account(owner_type: str, owner_id: int, moov_account_id: str) -> None:
