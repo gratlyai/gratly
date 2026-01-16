@@ -204,6 +204,153 @@ def get_platform_branding() -> Optional[Dict[str, Any]]:
         return None
 
 
+# ============================================================================
+# MOOV ENRICHMENT API - Form Shortening & Data Enrichment
+# ============================================================================
+
+def autocomplete_address(search: str, max_results: Optional[int] = None) -> List[Dict[str, Any]]:
+    """
+    Autocomplete address using Moov enrichment API.
+
+    Args:
+        search: Partial or complete address to search
+        max_results: Maximum number of results to return
+
+    Returns:
+        List of address suggestions with addressLine1, addressLine2, city, stateOrProvince, postalCode, entries
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    params = {"search": search}
+    if max_results:
+        params["maxResults"] = max_results
+
+    try:
+        response = _moov_request("GET", "/enrichment/address", params=params)
+        suggestions = response.get("suggestions", [])
+        logger.info(f"Found {len(suggestions)} address suggestions for: {search}")
+        return suggestions
+    except Exception as e:
+        logger.warning(f"Address autocomplete failed: {e}")
+        return []
+
+
+def enrich_business_profile(email: str) -> Optional[Dict[str, Any]]:
+    """
+    Enrich business profile using email address.
+
+    Args:
+        email: Email address to lookup
+
+    Returns:
+        Business profile with address, contact, industry, legal name, website
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    params = {"email": email}
+
+    try:
+        response = _moov_request("GET", "/enrichment/profile", params=params)
+        logger.info(f"Successfully enriched profile for email: {email}")
+        return response
+    except Exception as e:
+        logger.warning(f"Business profile enrichment failed for {email}: {e}")
+        return None
+
+
+def lookup_ach_institution(routing_number: Optional[str] = None, name: Optional[str] = None, state: Optional[str] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    """
+    Look up ACH institution by routing number or name.
+
+    Args:
+        routing_number: Routing number of the institution
+        name: Name of the financial institution
+        state: State where institution is based (optional)
+        limit: Maximum results to return (optional)
+
+    Returns:
+        List of matching ACH participant institutions
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    if not routing_number and not name:
+        logger.error("Must provide either routing_number or name")
+        return []
+
+    params = {}
+    if routing_number:
+        params["routingNumber"] = routing_number
+    if name:
+        params["name"] = name
+    if state:
+        params["state"] = state
+    if limit:
+        params["limit"] = limit
+
+    try:
+        response = _moov_request("GET", "/institutions/ach/search", params=params)
+        institutions = response.get("achParticipants", [])
+        logger.info(f"Found {len(institutions)} ACH institutions")
+        return institutions
+    except Exception as e:
+        logger.warning(f"ACH institution lookup failed: {e}")
+        return []
+
+
+def get_avatar(unique_id: str) -> Optional[bytes]:
+    """
+    Get avatar image for a unique ID (accountID, representativeID, routing number, userID).
+
+    Args:
+        unique_id: Any unique ID associated with an account
+
+    Returns:
+        Avatar image bytes, or None if not found
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    try:
+        # For avatar endpoint, we need to return raw binary data, not JSON
+        url = f"{_moov_base_url()}/avatars/{unique_id}"
+        headers = {
+            "Authorization": _moov_auth_header(),
+            "x-moov-version": "v2025.07.00"
+        }
+
+        request = urllib.request.Request(url=url, method="GET", headers=headers)
+        with urllib.request.urlopen(request) as response:
+            image_data = response.read()
+            logger.info(f"Successfully retrieved avatar for {unique_id}")
+            return image_data
+    except Exception as e:
+        logger.warning(f"Failed to get avatar for {unique_id}: {e}")
+        return None
+
+
+def list_industries() -> List[Dict[str, Any]]:
+    """
+    List all available industries with codes.
+
+    Returns:
+        List of industry objects with industry code, displayName, category, categoryDisplayName, defaultMcc
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    try:
+        response = _moov_request("GET", "/industries")
+        industries = response if isinstance(response, list) else response.get("industries", [])
+        logger.info(f"Retrieved {len(industries)} industries")
+        return industries
+    except Exception as e:
+        logger.warning(f"Failed to list industries: {e}")
+        return []
+
+
 def set_platform_branding() -> None:
     """
     Set Gratly branding colors on the Moov platform account.
