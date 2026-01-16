@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import os
 import secrets
+import string
 import logging
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -78,6 +79,9 @@ else:
         set_request_timezone,
         reset_request_timezone,
         _get_env_or_ini,
+        _generate_user_slug,
+        _ensure_user_has_slug,
+        _fetch_user_id_from_slug,
         PERMISSION_LABELS,
         PERMISSION_NAME_TO_KEY,
     )
@@ -209,6 +213,7 @@ async def apply_request_timezone(request: Request, call_next):
     restaurant_id = request.query_params.get("restaurant_id") or request.query_params.get("restaurantId")
     restaurant_guid = request.query_params.get("restaurant_guid") or request.query_params.get("restaurantGuid")
     user_id = request.query_params.get("user_id") or request.query_params.get("userId")
+    user_slug = request.query_params.get("user_slug") or request.query_params.get("userSlug")
 
     body_data = None
     if request.headers.get("content-type", "").startswith("application/json"):
@@ -221,6 +226,13 @@ async def apply_request_timezone(request: Request, call_next):
         restaurant_id = restaurant_id or body_data.get("restaurant_id") or body_data.get("restaurantId")
         restaurant_guid = restaurant_guid or body_data.get("restaurant_guid") or body_data.get("restaurantGuid")
         user_id = user_id or body_data.get("user_id") or body_data.get("userId")
+        user_slug = user_slug or body_data.get("user_slug") or body_data.get("userSlug")
+
+    # Resolve user_slug to user_id if provided
+    if user_slug and not user_id:
+        user_id_from_slug = _fetch_user_id_from_slug(user_slug)
+        if user_id_from_slug:
+            user_id = str(user_id_from_slug)
 
     restaurant_id_value = None
     if restaurant_id is not None:
@@ -2148,7 +2160,8 @@ def login(data: dict):
             USERID AS user_id,
             FIRSTNAME AS firstname,
             LASTNAME AS lastname,
-            PASSWORD_HASH AS password_hash
+            PASSWORD_HASH AS password_hash,
+            USERSLUG AS user_slug
         FROM USER_MASTER
         WHERE EMAIL = %s
         """,
@@ -2161,11 +2174,20 @@ def login(data: dict):
 
     # ✅ Verify hashed password
     if verify_password(password, user["password_hash"]):
-        restaurant_key = _fetch_restaurant_key(user["user_id"])
-        restaurant_name = _fetch_restaurant_name(user["user_id"])
+        user_id = user["user_id"]
+
+        # Ensure user has a slug (migration support for existing users)
+        user_slug = user.get("user_slug")
+        if not user_slug:
+            user_slug = _ensure_user_has_slug(user_id)
+
+        restaurant_key = _fetch_restaurant_key(user_id)
+        restaurant_name = _fetch_restaurant_name(user_id)
+
         return {
             "success": True,
-            "user_id": user["user_id"],
+            "user_id": user_id,
+            "user_slug": user_slug,
             "first_name": user.get("firstname"),
             "last_name": user.get("lastname"),
             "restaurant_key": restaurant_key,
@@ -2173,3 +2195,73 @@ def login(data: dict):
         }
     else:
         return {"success": False}
+
+@app.get("/user-context/{user_slug}")
+def get_user_context(user_slug: str):
+    """Get user context from slug for routing and permission checks."""
+    user_id = _fetch_user_id_from_slug(user_slug)
+    if not user_id:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    restaurant_key = _fetch_restaurant_key(user_id)
+    restaurant_name = _fetch_restaurant_name(user_id)
+
+    return {
+        "user_id": user_id,
+        "user_slug": user_slug,
+        "restaurant_key": restaurant_key,
+        "restaurant_name": restaurant_name,
+    }
+
+@app.post("/api/admin/migrate-user-slugs")
+def migrate_user_slugs(admin_user_id: int):
+    """
+    One-time migration: Generate slugs for all existing users without slugs.
+    Admin-only endpoint for data migration.
+    """
+    cursor = _get_cursor(dictionary=True)
+    try:
+        # Verify admin access
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM GRATLYDB.USER_PERMISSIONS up
+            JOIN GRATLYDB.MSTR_PERMISSIONS mp ON up.PERMISSIONSID = mp.PERMISSIONSID
+            WHERE up.USERID = %s
+              AND LOWER(mp.PERMISSIONSNAME) IN ('superadmin access', 'admin access')
+              AND (mp.DELETED IS NULL OR mp.DELETED = 0)
+            """,
+            (admin_user_id,),
+        )
+        result = cursor.fetchone()
+        if not result or result["count"] == 0:
+            raise HTTPException(status_code=403, detail="Admin access required")
+
+        # Find all users without slugs
+        cursor.execute(
+            "SELECT USERID FROM GRATLYDB.USER_MASTER WHERE USERSLUG IS NULL"
+        )
+        users_without_slugs = cursor.fetchall()
+
+        migrated = 0
+        errors = []
+
+        for user_row in users_without_slugs:
+            user_id = user_row["USERID"]
+            try:
+                slug = _ensure_user_has_slug(user_id)
+                migrated += 1
+                logger.info(f"Generated slug for user {user_id}: {slug}")
+            except Exception as e:
+                error_msg = f"User {user_id}: {str(e)}"
+                errors.append(error_msg)
+                logger.error(f"Failed to generate slug for user {user_id}: {e}")
+
+        return {
+            "success": True,
+            "migrated": migrated,
+            "total_users": len(users_without_slugs),
+            "errors": errors,
+        }
+    finally:
+        cursor.close()

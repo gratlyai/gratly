@@ -1,6 +1,8 @@
 from fastapi import HTTPException
 import pymysql
 import os
+import secrets
+import string
 from contextvars import ContextVar
 from dotenv import load_dotenv
 import configparser
@@ -96,6 +98,18 @@ try:
         "MSTR_PERMISSIONS",
         "DISPLAY",
         "DISPLAY TINYINT(1) DEFAULT 1",
+    )
+
+    _ensure_column(
+        "USER_MASTER",
+        "USERSLUG",
+        "USERSLUG VARCHAR(32) UNIQUE",
+    )
+
+    _ensure_index(
+        "USER_MASTER",
+        "IDX_USERSLUG",
+        "USERSLUG",
     )
 
     db.commit()
@@ -264,6 +278,62 @@ def _fetch_restaurant_guid(user_id: int) -> Optional[str]:
         )
         row = cursor.fetchone()
         return row["restaurant_guid"] if row else None
+    finally:
+        cursor.close()
+
+def _generate_user_slug() -> str:
+    """Generate a 16-character random slug for user identification.
+
+    Format: lowercase letters + digits only (URL-safe)
+    Example: 'k7m9p2x4n6q8s5t3'
+    """
+    alphabet = string.ascii_lowercase + string.digits
+    return ''.join(secrets.choice(alphabet) for _ in range(16))
+
+def _ensure_user_has_slug(user_id: int) -> str:
+    """Ensure user has a slug, generate if missing, return slug."""
+    cursor = _get_cursor(dictionary=True)
+    try:
+        # Check if user already has a slug
+        cursor.execute(
+            "SELECT USERSLUG FROM GRATLYDB.USER_MASTER WHERE USERID = %s",
+            (user_id,)
+        )
+        row = cursor.fetchone()
+        if row and row.get("USERSLUG"):
+            return row["USERSLUG"]
+
+        # Generate new slug with collision retry
+        max_retries = 5
+        for attempt in range(max_retries):
+            new_slug = _generate_user_slug()
+            try:
+                cursor.execute(
+                    "UPDATE GRATLYDB.USER_MASTER SET USERSLUG = %s WHERE USERID = %s",
+                    (new_slug, user_id)
+                )
+                return new_slug
+            except pymysql.err.IntegrityError as e:
+                # Collision detected (extremely rare), retry
+                if attempt == max_retries - 1:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Failed to generate unique user slug"
+                    )
+                continue
+    finally:
+        cursor.close()
+
+def _fetch_user_id_from_slug(user_slug: str) -> Optional[int]:
+    """Lookup user_id from user_slug."""
+    cursor = _get_cursor(dictionary=True)
+    try:
+        cursor.execute(
+            "SELECT USERID FROM GRATLYDB.USER_MASTER WHERE USERSLUG = %s",
+            (user_slug,)
+        )
+        row = cursor.fetchone()
+        return row["USERID"] if row else None
     finally:
         cursor.close()
 

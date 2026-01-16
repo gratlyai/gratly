@@ -9,11 +9,15 @@ type RequestOptions = Omit<RequestInit, "body"> & {
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { body, headers, ...rest } = options;
   const userId = localStorage.getItem("userId");
+  const userSlug = localStorage.getItem("userSlug");
+  const selectedRestaurantId = localStorage.getItem("selectedRestaurantId");
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...rest,
     headers: {
       "Content-Type": "application/json",
       ...(userId ? { "X-User-Id": userId } : {}),
+      ...(userSlug ? { "X-User-Slug": userSlug } : {}),
+      ...(selectedRestaurantId ? { "X-Restaurant-Id": selectedRestaurantId } : {}),
       ...(headers ?? {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),

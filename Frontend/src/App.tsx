@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Navigate, Routes, Route, useParams } from "react-router-dom";
+import { Navigate, Routes, Route, useParams, useLocation, useNavigate } from "react-router-dom";
 import GratlyLogin from "./GratlyLogin";
 import GratlySignUp from "./GratlySignUp";
 import GratlyHome from "./GratlyHome";
@@ -21,7 +21,7 @@ import { getStoredPermissions } from "./auth/permissions";
 import { fetchUserPermissions } from "./api/permissions";
 
 const SuperAdminRoute = ({ children }: { children: ReactNode }) => {
-  const { restaurantKey } = useParams();
+  const { userSlug } = useParams();
   const storedUserId = localStorage.getItem("userId") || "";
   const [isAllowed, setIsAllowed] = useState<boolean | null>(() => {
     if (!storedUserId) {
@@ -63,14 +63,14 @@ const SuperAdminRoute = ({ children }: { children: ReactNode }) => {
     );
   }
   if (!isAllowed) {
-    const fallbackPath = restaurantKey ? `/business/${restaurantKey}/home` : "/login";
+    const fallbackPath = userSlug ? `/${userSlug}/home` : "/login";
     return <Navigate to={fallbackPath} replace />;
   }
   return <>{children}</>;
 };
 
 const AdminRoute = ({ children }: { children: ReactNode }) => {
-  const { restaurantKey } = useParams();
+  const { userSlug } = useParams();
   const storedUserId = localStorage.getItem("userId") || "";
   const [isAllowed, setIsAllowed] = useState<boolean | null>(() => {
     if (!storedUserId) {
@@ -112,22 +112,47 @@ const AdminRoute = ({ children }: { children: ReactNode }) => {
     );
   }
   if (!isAllowed) {
-    const fallbackPath = restaurantKey ? `/business/${restaurantKey}/home` : "/login";
+    const fallbackPath = userSlug ? `/${userSlug}/home` : "/login";
     return <Navigate to={fallbackPath} replace />;
   }
   return <>{children}</>;
 };
 
+const LegacyRedirect = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const userSlug = localStorage.getItem("userSlug");
+    if (!userSlug) {
+      navigate("/login", { replace: true });
+      return;
+    }
+
+    // Extract subpath from old URL structure (skip first 3 parts: '', '/business' or '/employees', ':restaurantKey' or ':employeeId')
+    const pathParts = location.pathname.split("/");
+    const subPath = pathParts.slice(3).join("/") || "home";
+
+    // Redirect to new unified structure
+    navigate(`/${userSlug}/${subPath}`, { replace: true });
+  }, [location, navigate]);
+
+  return <div>Redirecting...</div>;
+};
+
 export default function App() {
   return (
     <Routes>
+      {/* Public routes */}
       <Route path="/" element={<GratlyLogin />} />
       <Route path="/login" element={<GratlyLogin />} />
       <Route path="/forgot-password" element={<PasswordReset />} />
       <Route path="/reset-password" element={<PasswordResetForm />} />
       <Route path="/signup" element={<GratlySignUp />} />
+
+      {/* Unified user routes */}
       <Route
-        path="/business/:restaurantKey"
+        path="/:userSlug"
         element={
           <PrivateRoute>
             <AppLayout />
@@ -174,38 +199,10 @@ export default function App() {
         />
         <Route path="profile" element={<GratlyProfile />} />
       </Route>
-      <Route
-        path="/employees/:employeeId"
-        element={
-          <PrivateRoute>
-            <AppLayout />
-          </PrivateRoute>
-        }
-      >
-        <Route path="home" element={<GratlyHome />} />
-        <Route path="approvals" element={<Reconciliation />} />
-        <Route path="shift-payout" element={<GratlyShiftPayout />} />
-        <Route path="team" element={<Employees />} />
-        <Route path="team/:employeeGuid" element={<EmployeeProfile />} />
-        <Route path="reports" element={<Reports />} />
-        <Route
-          path="settings"
-          element={
-            <SuperAdminRoute>
-              <Settings />
-            </SuperAdminRoute>
-          }
-        />
-        <Route
-          path="moov/onboarding"
-          element={
-            <PrivateRoute>
-              <MoovOnboarding />
-            </PrivateRoute>
-          }
-        />
-        <Route path="profile" element={<GratlyProfile />} />
-      </Route>
+
+      {/* Legacy redirects for backward compatibility */}
+      <Route path="/business/:restaurantKey/*" element={<LegacyRedirect />} />
+      <Route path="/employees/:employeeId/*" element={<LegacyRedirect />} />
     </Routes>
   );
 }

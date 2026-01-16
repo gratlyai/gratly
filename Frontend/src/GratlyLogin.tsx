@@ -86,29 +86,39 @@ const handleLogin = async () => {
     console.log(data);
 
     if (data.success) {
+      // Store user context
       if (data.user_id) {
         localStorage.setItem("userId", String(data.user_id));
       }
+      if (data.user_slug) {
+        localStorage.setItem("userSlug", data.user_slug);
+      }
+
       const fullName = `${data.first_name || ""} ${data.last_name || ""}`.trim();
       if (fullName) {
         localStorage.setItem("userName", fullName);
       } else {
         localStorage.removeItem("userName");
       }
+
+      // Store restaurant context (unified format uses selectedRestaurantId in localStorage)
       if (data.restaurant_key) {
-        localStorage.setItem("restaurantKey", String(data.restaurant_key));
-        if (data.restaurant_name) {
-          localStorage.setItem("restaurantName", String(data.restaurant_name));
-        } else {
-          localStorage.removeItem("restaurantName");
-        }
+        localStorage.setItem("selectedRestaurantId", String(data.restaurant_key));
+        localStorage.setItem("restaurantKey", String(data.restaurant_key)); // Keep for compatibility
       }
+      if (data.restaurant_name) {
+        localStorage.setItem("restaurantName", String(data.restaurant_name));
+      } else {
+        localStorage.removeItem("restaurantName");
+      }
+
       const redirectTarget = getRedirectTarget();
-      if (redirectTarget) {
+      if (redirectTarget && data.user_slug && redirectTarget.startsWith(`/${data.user_slug}/`)) {
         navigate(redirectTarget);
         return;
       }
 
+      // Fetch and store permissions
       const employeeId = data.user_id ? String(data.user_id) : "";
       let permissions = getStoredPermissions(employeeId);
       if (data.user_id) {
@@ -119,17 +129,12 @@ const handleLogin = async () => {
           console.warn("Failed to refresh permissions:", error);
         }
       }
-      const isBusinessUser =
-        permissions.adminAccess ||
-        permissions.managerAccess ||
-        permissions.createPayoutSchedules ||
-        permissions.approvePayouts ||
-        permissions.manageTeam;
-      if (data.restaurant_key && isBusinessUser) {
-        navigate(`/business/${data.restaurant_key}/home`);
-      } else if (employeeId) {
-        navigate(`/employees/${employeeId}/home`);
+
+      // Navigate to unified URL structure with userSlug
+      if (data.user_slug) {
+        navigate(`/${data.user_slug}/home`);
       } else if (data.restaurant_key) {
+        // Fallback for legacy (shouldn't happen)
         navigate(`/business/${data.restaurant_key}/home`);
       } else {
         navigate("/login");

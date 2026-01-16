@@ -29,7 +29,7 @@ const AppLayout: React.FC = () => {
   const [isSidebarHovered, setIsSidebarHovered] = useState<boolean>(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState<boolean>(false);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
-  const { restaurantKey, employeeId } = useParams();
+  const { userSlug } = useParams<{ userSlug: string }>();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -64,8 +64,9 @@ const AppLayout: React.FC = () => {
 
   const storedUserName = localStorage.getItem("userName") || "User";
   const storedUserId = localStorage.getItem("userId") || "";
+  const storedUserSlug = localStorage.getItem("userSlug") || "";
   const restaurantName = localStorage.getItem("restaurantName") || "";
-  const storedRestaurantKey = localStorage.getItem("restaurantKey") || "";
+  const selectedRestaurantId = localStorage.getItem("selectedRestaurantId") || "";
   const userInitials =
     storedUserName
       .split(" ")
@@ -73,9 +74,9 @@ const AppLayout: React.FC = () => {
       .map((part) => part[0]?.toUpperCase())
       .slice(0, 2)
       .join("") || "U";
-  const activeEmployeeId = employeeId || storedUserId;
+  const activeUserSlug = userSlug || storedUserSlug;
   const [permissions, setPermissions] = useState<PermissionState>(() =>
-    getStoredPermissions(activeEmployeeId),
+    getStoredPermissions(storedUserId),
   );
   const [permissionsLoaded, setPermissionsLoaded] = useState<boolean>(false);
   const isAdminUser = permissions.adminAccess || permissions.superadminAccess;
@@ -86,25 +87,23 @@ const AppLayout: React.FC = () => {
     permissions.createPayoutSchedules ||
     permissions.approvePayouts ||
     permissions.manageTeam;
-  const businessBase = restaurantKey ? `/business/${restaurantKey}` : "/business";
-  const employeeBase = activeEmployeeId ? `/employees/${activeEmployeeId}` : "/employees";
-  const basePath = restaurantKey ? businessBase : employeeBase;
+  const basePath = `/${activeUserSlug}`;
   const isCompactSidebar = isSidebarCollapsed && !isSidebarHovered;
-  const outletKey = restaurantKey ?? employeeId ?? "default";
+  const outletKey = activeUserSlug ?? "default";
   const [restaurantOptions, setRestaurantOptions] = useState<RestaurantSelectionOption[]>([]);
   const [selectedRestaurantValue, setSelectedRestaurantValue] = useState<string>("");
   const [isRestaurantOptionsLoading, setIsRestaurantOptionsLoading] = useState<boolean>(false);
   const [isRestaurantSaving, setIsRestaurantSaving] = useState<boolean>(false);
   const [restaurantSelectionError, setRestaurantSelectionError] = useState<string | null>(null);
-  const showRestaurantSelector = isSuperAdmin || (permissions.adminAccess && !restaurantKey);
+  const showRestaurantSelector = isSuperAdmin || permissions.adminAccess;
 
   useEffect(() => {
     let isMounted = true;
-    const nextPermissions = getStoredPermissions(activeEmployeeId);
+    const nextPermissions = getStoredPermissions(storedUserId);
     if (isMounted) {
       setPermissions(nextPermissions);
     }
-    const numericUserId = Number(activeEmployeeId);
+    const numericUserId = Number(storedUserId);
     if (!Number.isFinite(numericUserId) || numericUserId <= 0) {
       setPermissionsLoaded(true);
       return () => {
@@ -127,7 +126,7 @@ const AppLayout: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, [activeEmployeeId, storedUserName]);
+  }, [storedUserId, storedUserName]);
 
   useEffect(() => {
     if (!showRestaurantSelector) {
@@ -170,7 +169,7 @@ const AppLayout: React.FC = () => {
     if (selectedRestaurantValue) {
       return;
     }
-    const initialId = restaurantKey || storedRestaurantKey;
+    const initialId = selectedRestaurantId;
     if (!initialId) {
       return;
     }
@@ -183,7 +182,7 @@ const AppLayout: React.FC = () => {
     } else if (matched?.restaurantId) {
       setSelectedRestaurantValue(String(matched.restaurantId));
     }
-  }, [restaurantOptions, restaurantKey, selectedRestaurantValue, storedRestaurantKey]);
+  }, [restaurantOptions, selectedRestaurantId, selectedRestaurantValue]);
 
   const canAccess = (key?: NavItem["permissionKey"]) => {
     if (!key) {
@@ -436,24 +435,6 @@ const AppLayout: React.FC = () => {
   );
 
   const allowedNavItems = useMemo(() => navItems.filter((item) => canAccess(item.permissionKey)), [navItems, permissions, isAdminUser]);
-
-  useEffect(() => {
-    if (!isBusinessUser && restaurantKey && activeEmployeeId) {
-      navigate(`${employeeBase}/home`, { replace: true });
-    }
-  }, [isBusinessUser, restaurantKey, activeEmployeeId, employeeBase, navigate]);
-
-  useEffect(() => {
-    if (isBusinessUser && !restaurantKey && storedRestaurantKey) {
-      navigate(`/business/${storedRestaurantKey}/home`, { replace: true });
-    }
-  }, [isBusinessUser, restaurantKey, storedRestaurantKey, navigate]);
-
-  useEffect(() => {
-    if (!isBusinessUser && employeeId && storedUserId && employeeId !== storedUserId) {
-      navigate(`${employeeBase}/home`, { replace: true });
-    }
-  }, [isBusinessUser, employeeId, storedUserId, employeeBase, navigate]);
 
   useEffect(() => {
     if (!location.pathname.startsWith(basePath)) {
