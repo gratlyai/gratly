@@ -221,7 +221,7 @@ def _build_restaurant_account_payload(restaurant_id: int) -> Dict[str, Any]:
         "accountType": "business",
         "profile": {
             "business": {
-                "name": restaurant_name,
+                "legalBusinessName": restaurant_name,
             }
         },
         "metadata": {"restaurant_id": str(restaurant_id)},
@@ -236,6 +236,11 @@ def _build_employee_account_payload(user_id: int) -> Dict[str, Any]:
     # Ensure we have a name
     name = (profile.get("name") or "User").strip()
 
+    # Parse full name into first and last name
+    name_parts = name.rsplit(" ", 1)  # Split on last space
+    first_name = name_parts[0]
+    last_name = name_parts[1] if len(name_parts) > 1 else ""
+
     # Build contact object, excluding None/empty values (Moov doesn't accept null)
     contact = {"name": name}  # Always include name
     if profile.get("email"):
@@ -247,7 +252,10 @@ def _build_employee_account_payload(user_id: int) -> Dict[str, Any]:
         "accountType": "individual",
         "profile": {
             "individual": {
-                "name": name,
+                "name": {
+                    "firstName": first_name,
+                    "lastName": last_name or "User",
+                }
             }
         },
         "metadata": {"user_id": str(user_id)},
