@@ -12,6 +12,11 @@ try:
         list_payment_methods,
         refresh_payment_methods,
         set_preferred_payment_method,
+        autocomplete_address,
+        enrich_business_profile,
+        lookup_ach_institution,
+        get_avatar,
+        list_industries,
     )
     from Backend.moov_jobs import _send_billing_email
 except ImportError:
@@ -23,6 +28,11 @@ except ImportError:
         list_payment_methods,
         refresh_payment_methods,
         set_preferred_payment_method,
+        autocomplete_address,
+        enrich_business_profile,
+        lookup_ach_institution,
+        get_avatar,
+        list_industries,
     )
     from moov_jobs import _send_billing_email
 
@@ -440,6 +450,77 @@ def update_restaurant_preferred_method(restaurant_id: int, payload: PreferredPay
 def update_employee_preferred_method(user_id: int, payload: PreferredPaymentPayload):
     set_preferred_payment_method("employee", user_id, payload.paymentMethodId)
     return {"success": True}
+
+
+# ============================================================================
+# MOOV ENRICHMENT API ENDPOINTS - Form Shortening & Data Enrichment
+# ============================================================================
+
+@router.get("/api/moov/enrichment/address")
+def enrich_address(search: str, max_results: Optional[int] = None):
+    """
+    Autocomplete address using Moov enrichment API.
+
+    Query Parameters:
+    - search: Partial or complete address to search (required)
+    - max_results: Maximum number of suggestions to return (optional)
+    """
+    return autocomplete_address(search, max_results)
+
+
+@router.get("/api/moov/enrichment/business-profile")
+def enrich_profile(email: str):
+    """
+    Enrich business profile using email address.
+
+    Query Parameters:
+    - email: Email address to lookup (required)
+
+    Returns business details: address, phone, industry codes, legal name, website
+    """
+    profile = enrich_business_profile(email)
+    if not profile:
+        raise HTTPException(status_code=404, detail="No profile found for email")
+    return profile
+
+
+@router.get("/api/moov/enrichment/ach-institutions")
+def search_ach_institutions(
+    routing_number: Optional[str] = None,
+    name: Optional[str] = None,
+    state: Optional[str] = None,
+    limit: Optional[int] = None
+):
+    """
+    Look up ACH institutions by routing number or name.
+
+    Query Parameters:
+    - routing_number: Routing number of the institution (optional)
+    - name: Name of the financial institution (optional)
+    - state: State where institution is based (optional)
+    - limit: Maximum results to return (optional)
+
+    Note: Must provide either routing_number or name
+    """
+    if not routing_number and not name:
+        raise HTTPException(status_code=400, detail="Must provide either routing_number or name")
+
+    return lookup_ach_institution(routing_number, name, state, limit)
+
+
+@router.get("/api/moov/enrichment/industries")
+def get_industries():
+    """
+    Get all available industries with codes and categories.
+
+    Returns array of industries with:
+    - industry: classification identifier
+    - displayName: human-readable name
+    - category: category slug
+    - categoryDisplayName: human-readable category
+    - defaultMcc: default Merchant Category Code
+    """
+    return list_industries()
 
 
 @router.post("/api/webhooks/moov")
