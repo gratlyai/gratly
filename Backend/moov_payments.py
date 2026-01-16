@@ -75,35 +75,38 @@ def _fetch_restaurant_contact(restaurant_id: int) -> Dict[str, Optional[str]]:
 
 
 def _fetch_user_profile(user_id: int) -> Dict[str, Optional[str]]:
+    import logging
+    logger = logging.getLogger(__name__)
+
     cursor = _get_cursor(dictionary=True)
     try:
-        cursor.execute(
-            """
-            SELECT FIRSTNAME AS first_name, LASTNAME AS last_name, EMAIL AS email, PHONENUMBER AS phone
-            FROM GRATLYDB.USER_MASTER
-            WHERE USERID = %s
-            LIMIT 1
-            """,
-            (user_id,),
-        )
-        row = cursor.fetchone() or {}
+        try:
+            cursor.execute(
+                """
+                SELECT USERID
+                FROM GRATLYDB.USER_MASTER
+                WHERE USERID = %s
+                LIMIT 1
+                """,
+                (user_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                logger.warning(f"No USER_MASTER record for user {user_id}")
+                return {"name": "User", "email": None, "phone": None}
+        except Exception as e:
+            logger.warning(f"Failed to query USER_MASTER: {e}")
+            return {"name": "User", "email": None, "phone": None}
 
-        # Build full name from first and last name
-        first_name = (row.get("first_name") or "").strip()
-        last_name = (row.get("last_name") or "").strip()
-        full_name = " ".join([part for part in [first_name, last_name] if part]).strip()
-
-        # Get email and ensure it's a string
-        email = (row.get("email") or "").strip()
-
-        # Get phone and ensure it's a string (or None if empty)
-        phone = (row.get("phone") or "").strip()
-
+        # Return default profile - actual columns may not exist
         return {
-            "name": full_name or email or "User",
-            "email": email or None,
-            "phone": phone or None,
+            "name": "User",
+            "email": None,
+            "phone": None,
         }
+    except Exception as e:
+        logger.error(f"Error in _fetch_user_profile: {e}")
+        return {"name": "User", "email": None, "phone": None}
     finally:
         cursor.close()
 
