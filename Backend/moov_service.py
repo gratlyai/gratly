@@ -418,21 +418,43 @@ def create_onboarding_link(
     return_url: str,
     refresh_url: Optional[str] = None,
 ) -> str:
+    """
+    Create onboarding invite for an existing account.
+
+    This uses the Moov onboarding-invites endpoint which creates a link
+    for the account holder to complete KYC/KYB verification.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
     payload = {
-        "accountID": moov_account_id,
-        "redirectURL": return_url,
+        # Required fields for onboarding-invites endpoint
+        "capabilities": ["wallet", "send-funds", "collect-funds"],
+        "feePlanCodes": [],  # Empty if no specific fee plan
+        "scopes": ["accounts.write", "accounts.read"],  # Standard scopes for account management
+        # Optional fields
+        "returnURL": return_url,
+        # Prefill the account ID so onboarding is tied to this account
+        "prefill": {
+            "accountID": moov_account_id
+        }
     }
-    if refresh_url:
-        payload["refreshURL"] = refresh_url
+
+    logger.info(f"Creating onboarding invite for account {moov_account_id}")
     response = _moov_request(
         "POST",
-        "/onboarding-links",
+        "/onboarding-invites",
         json_body=payload,
         idempotency_key=f"moov-onboarding-{moov_account_id}-{hash(return_url)}",
     )
-    link = response.get("link") or response.get("url")
+
+    # Moov returns different field names - try both
+    link = response.get("link") or response.get("url") or response.get("inviteLink")
     if not link:
+        logger.error(f"Onboarding link missing from response: {response}")
         raise HTTPException(status_code=502, detail="Moov onboarding link missing")
+
+    logger.info(f"Successfully created onboarding link: {link[:50]}...")
     return link
 
 
