@@ -217,38 +217,30 @@ def _update_transfer_status(moov_transfer_id: str, status: str, failure_reason: 
 
 
 def _build_restaurant_account_payload(restaurant_id: int) -> Dict[str, Any]:
+    import logging
+    logger = logging.getLogger(__name__)
+
     restaurant_name = ((_fetch_restaurant_name(restaurant_id) or "Restaurant").strip() or "Restaurant")
-    contact = _fetch_restaurant_contact(restaurant_id) or {}
 
-    # Build contact object, excluding None/empty values (Moov doesn't accept null)
-    contact_name = (contact.get("name") or restaurant_name).strip() or restaurant_name
-    contact_obj = {"name": contact_name}  # Always include name
-
-    contact_email = (contact.get("email") or "").strip()
-    if contact_email:
-        contact_obj["email"] = contact_email
-
-    contact_phone = (contact.get("phone") or "").strip()
-    if contact_phone:
-        contact_obj["phone"] = contact_phone
-
-    return {
+    # Moov API v2025.07.00 schema - only accepts these fields
+    payload = {
         "accountType": "business",
         "profile": {
             "business": {
                 "legalBusinessName": restaurant_name,
             }
         },
-        "metadata": {"restaurant_id": str(restaurant_id)},
-        "contact": contact_obj,
-        "capabilities": ["wallet", "send-funds", "collect-funds"],
-        "termsOfService": {
-            "token": "moov-tos"  # Platform acceptance token for requested capabilities
-        }
+        "foreignId": f"restaurant-{restaurant_id}"
     }
+
+    logger.info(f"[RESTAURANT PAYLOAD] Built payload: {json.dumps(payload, indent=2)}")
+    return payload
 
 
 def _build_employee_account_payload(user_id: int) -> Dict[str, Any]:
+    import logging
+    logger = logging.getLogger(__name__)
+
     profile = _fetch_user_profile(user_id)
 
     # Ensure we have a name
@@ -259,14 +251,8 @@ def _build_employee_account_payload(user_id: int) -> Dict[str, Any]:
     first_name = name_parts[0]
     last_name = name_parts[1] if len(name_parts) > 1 else ""
 
-    # Build contact object, excluding None/empty values (Moov doesn't accept null)
-    contact = {"name": name}  # Always include name
-    if profile.get("email"):
-        contact["email"] = profile.get("email")
-    if profile.get("phone"):
-        contact["phone"] = profile.get("phone")
-
-    return {
+    # Moov API v2025.07.00 schema - only accepts these fields for individual accounts
+    payload = {
         "accountType": "individual",
         "profile": {
             "individual": {
@@ -276,13 +262,16 @@ def _build_employee_account_payload(user_id: int) -> Dict[str, Any]:
                 }
             }
         },
-        "metadata": {"user_id": str(user_id)},
-        "contact": contact,
-        "capabilities": ["wallet", "transfers"],
-        "termsOfService": {
-            "token": "moov-tos"  # Platform acceptance token for requested capabilities
-        }
+        "foreignId": f"employee-{user_id}"
     }
+
+    # Add optional email if available
+    email = (profile.get("email") or "").strip()
+    if email:
+        payload["profile"]["individual"]["email"] = email
+
+    logger.info(f"[EMPLOYEE PAYLOAD] Built payload: {json.dumps(payload, indent=2)}")
+    return payload
 
 
 @router.post("/api/restaurants/{restaurant_id}/moov/onboarding-link")
