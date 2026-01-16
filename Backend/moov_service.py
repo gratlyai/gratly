@@ -503,16 +503,17 @@ def create_onboarding_link(
 
     This uses the Moov onboarding-invites endpoint which creates a link
     for the account holder to complete KYC/KYB verification.
-
-    Note: Fee plans are attached separately via attach_fee_plan_agreement()
-    after the account is created.
     """
     import logging
     logger = logging.getLogger(__name__)
 
+    # Get fee plan ID from environment - required by Moov API
+    fee_plan_id = _get_default_fee_plan_id()
+
     payload = {
         # Required fields for onboarding-invites endpoint
         "capabilities": ["wallet", "send-funds", "collect-funds"],
+        "feePlanCodes": [fee_plan_id],  # Required by Moov API v2025.07.00
         "scopes": ["accounts.write", "accounts.read"],  # Standard scopes for account management
         # Optional fields
         "returnURL": return_url,
@@ -522,7 +523,7 @@ def create_onboarding_link(
         }
     }
 
-    logger.info(f"Creating onboarding invite for account {moov_account_id}")
+    logger.info(f"Creating onboarding invite for account {moov_account_id} with fee plan {fee_plan_id}")
     response = _moov_request(
         "POST",
         "/onboarding-invites",
