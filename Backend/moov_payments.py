@@ -284,11 +284,13 @@ def start_restaurant_onboarding(restaurant_id: int, payload: MoovOnboardingPaylo
     import logging
     logger = logging.getLogger(__name__)
     try:
+        logger.info(f"Starting Moov onboarding for restaurant {restaurant_id}")
         moov_account_id = ensure_moov_account(
             "restaurant",
             restaurant_id,
             _build_restaurant_account_payload(restaurant_id),
         )
+        logger.info(f"Created Moov account {moov_account_id}, generating onboarding link")
         link = create_onboarding_link(moov_account_id, payload.returnUrl, payload.refreshUrl)
         return {"redirectUrl": link}
     except Exception as e:
@@ -297,6 +299,10 @@ def start_restaurant_onboarding(restaurant_id: int, payload: MoovOnboardingPaylo
         if "nodename nor servname provided" in str(e) or "Connection" in str(e.__class__.__name__):
             logger.warning("Moov API unreachable - returning mock onboarding URL for testing")
             return {"redirectUrl": f"{payload.returnUrl}?moov_mock=true&account_id=mock-restaurant-{restaurant_id}"}
+        # For database schema errors, return a more user-friendly message
+        if "Unknown column" in str(e):
+            logger.warning(f"Database schema mismatch: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to create Moov account: Database schema issue")
         raise
 
 
