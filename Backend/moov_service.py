@@ -83,8 +83,13 @@ def _moov_request(
                 return {"raw": decoded}
     except urllib.error.HTTPError as exc:
         # Parse Moov's error response structure
+        import logging
+        logger = logging.getLogger(__name__)
+
         try:
             error_body = exc.read().decode("utf-8") if exc.fp else "{}"
+            logger.error(f"Moov API raw response body: {error_body}")
+
             error_data = json.loads(error_body)
 
             # Moov API v2025.07.00 error structure: {"error": "description"}
@@ -115,12 +120,11 @@ def _moov_request(
             status_code = status_map.get(exc.code, 502)
 
             # Log the full error for debugging
-            import logging
-            logger = logging.getLogger(__name__)
             logger.error(f"Moov API error: {exc.code} {detail}", extra={
                 "moov_error_code": error_code,
                 "moov_error_details": error_details,
-                "url": url
+                "request_url": url,
+                "request_body": json_body
             })
 
             raise HTTPException(status_code=status_code, detail=detail) from exc
