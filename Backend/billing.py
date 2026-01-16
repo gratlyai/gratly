@@ -78,11 +78,11 @@ def _parse_amount_to_cents(value: Optional[str]) -> Optional[int]:
 def _fetch_billing_config(restaurant_id: int) -> BillingConfig:
     cursor = _get_cursor(dictionary=True)
     try:
+        # Fetch billing info from SRC_ONBOARDING
         cursor.execute(
             """
             SELECT BILLING_DATE AS billing_date,
-                   BILLING_AMOUNT AS billing_amount,
-                   PAID_STATUS AS paid_status
+                   BILLING_AMOUNT AS billing_amount
             FROM GRATLYDB.SRC_ONBOARDING
             WHERE RESTAURANTID = %s
             LIMIT 1
@@ -94,7 +94,13 @@ def _fetch_billing_config(restaurant_id: int) -> BillingConfig:
         billing_day = None
         if billing_date_str:
             try:
-                billing_day = int(billing_date_str)
+                # BILLING_DATE is stored as DATE, convert to day of month
+                from datetime import datetime as dt
+                if isinstance(billing_date_str, str):
+                    billing_date = dt.strptime(billing_date_str, "%Y-%m-%d")
+                else:
+                    billing_date = billing_date_str
+                billing_day = billing_date.day
             except (TypeError, ValueError):
                 pass
 
@@ -128,7 +134,7 @@ def _fetch_billing_config(restaurant_id: int) -> BillingConfig:
         return BillingConfig(
             billingDate=billing_day,
             billingAmount=billing_amount_cents,
-            paidStatus=row.get("paid_status"),
+            paidStatus=None,  # PAID_STATUS column doesn't exist in SRC_ONBOARDING
             moovAccountId=moov_account_id,
             onboardingStatus=onboarding_status,
         )
@@ -186,50 +192,74 @@ def _serialize_invoice(row: Dict[str, Any]) -> MonthlyInvoice:
 
 @router.get("/api/billing/summary", response_model=BillingSummary)
 def get_billing_summary(restaurant_id: int = Query(...)):
-    # Fetch billing configuration
-    config = _fetch_billing_config(restaurant_id)
+    import logging
+    logger = logging.getLogger(__name__)
 
-    # Fetch payment methods from Moov
-    payment_methods = []
     try:
-        moov_methods = list_payment_methods("restaurant", restaurant_id)
-        for method in moov_methods:
-            payment_methods.append(
-                PaymentMethod(
-                    id=method.get("id", ""),
-                    moovPaymentMethodId=method.get("moov_payment_method_id", method.get("id", "")),
-                    methodType=method.get("method_type", ""),
-                    brand=method.get("brand"),
-                    last4=method.get("last4"),
-                    status=method.get("status", ""),
-                    isPreferred=bool(method.get("is_preferred", False)),
-                    isVerified=bool(method.get("is_verified", False)),
+        logger.info(f"Fetching billing summary for restaurant {restaurant_id}")
+
+        # Fetch billing configuration
+        try:
+            config = _fetch_billing_config(restaurant_id)
+            logger.info(f"Fetched billing config: {config}")
+        except Exception as e:
+            logger.error(f"Error fetching billing config: {e}", exc_info=True)
+            raise
+
+        # Fetch payment methods from Moov
+        payment_methods = []
+        try:
+            moov_methods = list_payment_methods("restaurant", restaurant_id)
+            logger.info(f"Fetched {len(moov_methods)} payment methods from Moov")
+            for method in moov_methods:
+                payment_methods.append(
+                    PaymentMethod(
+                        id=method.get("id", ""),
+                        moovPaymentMethodId=method.get("moov_payment_method_id", method.get("id", "")),
+                        methodType=method.get("method_type", ""),
+                        brand=method.get("brand"),
+                        last4=method.get("last4"),
+                        status=method.get("status", ""),
+                        isPreferred=bool(method.get("is_preferred", False)),
+                        isVerified=bool(method.get("is_verified", False)),
+                    )
                 )
-            )
-    except Exception:
-        # If Moov integration fails, return empty methods
-        pass
+        except Exception as e:
+            logger.warning(f"Failed to fetch payment methods: {e}", exc_info=True)
+            # If Moov integration fails, return empty methods
+            pass
 
-    # Fetch recent invoices
-    invoice_rows = _fetch_invoices(restaurant_id, limit=10)
-    recent_invoices = [_serialize_invoice(row) for row in invoice_rows]
+        # Fetch recent invoices
+        try:
+            invoice_rows = _fetch_invoices(restaurant_id, limit=10)
+            recent_invoices = [_serialize_invoice(row) for row in invoice_rows]
+            logger.info(f"Fetched {len(recent_invoices)} invoices")
+        except Exception as e:
+            logger.error(f"Error fetching invoices: {e}", exc_info=True)
+            recent_invoices = []
 
-    # Upcoming invoice is the next due invoice (if any unpaid)
-    upcoming_invoice = None
-    for invoice in recent_invoices:
-        if invoice.paymentStatus not in ("paid", "completed"):
-            upcoming_invoice = {
-                "dueDate": invoice.dueDate,
-                "amountCents": invoice.amountCents,
-            }
-            break
+        # Upcoming invoice is the next due invoice (if any unpaid)
+        upcoming_invoice = None
+        for invoice in recent_invoices:
+            if invoice.paymentStatus not in ("paid", "completed"):
+                upcoming_invoice = {
+                    "dueDate": invoice.dueDate,
+                    "amountCents": invoice.amountCents,
+                }
+                break
 
-    return BillingSummary(
-        config=config,
-        paymentMethods=payment_methods,
-        upcomingInvoice=upcoming_invoice,
-        recentInvoices=recent_invoices,
-    )
+        result = BillingSummary(
+            config=config,
+            paymentMethods=payment_methods,
+            upcomingInvoice=upcoming_invoice,
+            recentInvoices=recent_invoices,
+        )
+        logger.info(f"Successfully built billing summary response")
+        return result
+
+    except Exception as e:
+        logger.error(f"Unhandled error in get_billing_summary: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch billing summary: {str(e)}")
 
 
 @router.get("/api/billing/config")
