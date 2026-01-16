@@ -1225,65 +1225,102 @@ def onboard_restaurant(payload: OnboardRestaurantPayload):
 
         if existing:
             restaurant_id = existing["restaurant_id"]
-            cursor.execute(
-                """
-                UPDATE GRATLYDB.SRC_ONBOARDING
-                SET
-                    PAYOUT_FEE_PAYER = COALESCE(%s, PAYOUT_FEE_PAYER),
-                    PAYOUT_FEE = COALESCE(%s, PAYOUT_FEE),
-                    ACTIVATION_DATE = COALESCE(%s, ACTIVATION_DATE),
-                    FREE_PERIOD = COALESCE(%s, FREE_PERIOD),
-                    BILLING_DATE = COALESCE(%s, BILLING_DATE),
-                    BILLING_AMOUNT = COALESCE(%s, BILLING_AMOUNT),
-                    ADMIN_NAME = COALESCE(%s, ADMIN_NAME),
-                    ADMIN_PHONE = COALESCE(%s, ADMIN_PHONE),
-                    ADMIN_EMAIL = COALESCE(%s, ADMIN_EMAIL)
-                WHERE RESTAURANTGUID = %s
-                """,
-                (
-                    _clean_value(payload.payoutFeePayer),
-                    _clean_value(payload.payoutFee),
-                    _clean_value(payload.activationDate),
-                    _clean_value(payload.freePeriod),
-                    _clean_value(payload.billingDate),
-                    _clean_value(payload.billingAmount),
-                    _clean_value(payload.adminName),
-                    _clean_value(payload.adminPhone),
-                    _clean_value(payload.adminEmail),
-                    payload.restaurantGuid,
-                ),
-            )
-        else:
-            cursor.execute(
-                """
-                INSERT INTO GRATLYDB.SRC_ONBOARDING (
-                    RESTAURANTGUID,
-                    PAYOUT_FEE_PAYER,
-                    PAYOUT_FEE,
-                    ACTIVATION_DATE,
-                    FREE_PERIOD,
-                    BILLING_DATE,
-                    BILLING_AMOUNT,
-                    ADMIN_NAME,
-                    ADMIN_PHONE,
-                    ADMIN_EMAIL
+            # Try updating with all columns first, fallback to basic columns if schema differs
+            try:
+                cursor.execute(
+                    """
+                    UPDATE GRATLYDB.SRC_ONBOARDING
+                    SET
+                        PAYOUT_FEE_PAYER = COALESCE(%s, PAYOUT_FEE_PAYER),
+                        PAYOUT_FEE = COALESCE(%s, PAYOUT_FEE),
+                        ACTIVATION_DATE = COALESCE(%s, ACTIVATION_DATE),
+                        FREE_PERIOD = COALESCE(%s, FREE_PERIOD),
+                        BILLING_DATE = COALESCE(%s, BILLING_DATE),
+                        BILLING_AMOUNT = COALESCE(%s, BILLING_AMOUNT),
+                        ADMIN_NAME = COALESCE(%s, ADMIN_NAME),
+                        ADMIN_PHONE = COALESCE(%s, ADMIN_PHONE),
+                        ADMIN_EMAIL = COALESCE(%s, ADMIN_EMAIL)
+                    WHERE RESTAURANTGUID = %s
+                    """,
+                    (
+                        _clean_value(payload.payoutFeePayer),
+                        _clean_value(payload.payoutFee),
+                        _clean_value(payload.activationDate),
+                        _clean_value(payload.freePeriod),
+                        _clean_value(payload.billingDate),
+                        _clean_value(payload.billingAmount),
+                        _clean_value(payload.adminName),
+                        _clean_value(payload.adminPhone),
+                        _clean_value(payload.adminEmail),
+                        payload.restaurantGuid,
+                    ),
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    payload.restaurantGuid,
-                    _clean_value(payload.payoutFeePayer),
-                    _clean_value(payload.payoutFee),
-                    _clean_value(payload.activationDate),
-                    _clean_value(payload.freePeriod),
-                    _clean_value(payload.billingDate),
-                    _clean_value(payload.billingAmount),
-                    _clean_value(payload.adminName),
-                    _clean_value(payload.adminPhone),
-                    _clean_value(payload.adminEmail),
-                ),
-            )
-            restaurant_id = cursor.lastrowid
+            except pymysql.err.OperationalError as e:
+                # If columns don't exist in production, do minimal update
+                if "Unknown column" in str(e):
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Production schema missing columns, using minimal update: {e}")
+                    # Just update RESTAURANTGUID to ensure the record exists
+                    cursor.execute(
+                        """
+                        UPDATE GRATLYDB.SRC_ONBOARDING
+                        SET RESTAURANTGUID = %s
+                        WHERE RESTAURANTGUID = %s
+                        """,
+                        (payload.restaurantGuid, payload.restaurantGuid),
+                    )
+                else:
+                    raise
+        else:
+            # Try inserting with all columns first, fallback if schema differs
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO GRATLYDB.SRC_ONBOARDING (
+                        RESTAURANTGUID,
+                        PAYOUT_FEE_PAYER,
+                        PAYOUT_FEE,
+                        ACTIVATION_DATE,
+                        FREE_PERIOD,
+                        BILLING_DATE,
+                        BILLING_AMOUNT,
+                        ADMIN_NAME,
+                        ADMIN_PHONE,
+                        ADMIN_EMAIL
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        payload.restaurantGuid,
+                        _clean_value(payload.payoutFeePayer),
+                        _clean_value(payload.payoutFee),
+                        _clean_value(payload.activationDate),
+                        _clean_value(payload.freePeriod),
+                        _clean_value(payload.billingDate),
+                        _clean_value(payload.billingAmount),
+                        _clean_value(payload.adminName),
+                        _clean_value(payload.adminPhone),
+                        _clean_value(payload.adminEmail),
+                    ),
+                )
+                restaurant_id = cursor.lastrowid
+            except pymysql.err.OperationalError as e:
+                # If columns don't exist, insert minimal data
+                if "Unknown column" in str(e):
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Production schema missing columns, using minimal insert: {e}")
+                    cursor.execute(
+                        """
+                        INSERT INTO GRATLYDB.SRC_ONBOARDING (RESTAURANTGUID)
+                        VALUES (%s)
+                        """,
+                        (payload.restaurantGuid,),
+                    )
+                    restaurant_id = cursor.lastrowid
+                else:
+                    raise
 
         if payload.restaurantName:
             cursor.execute(

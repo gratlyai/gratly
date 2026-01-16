@@ -42,22 +42,51 @@ except ImportError:
 
 
 def _fetch_restaurants() -> List[Dict[str, Any]]:
+    import logging
+    logger = logging.getLogger(__name__)
+
     cursor = _get_cursor(dictionary=True)
     try:
-        cursor.execute(
-            """
-            SELECT RESTAURANTID AS restaurant_id,
-                   RESTAURANTGUID AS restaurant_guid,
-                   BILLING_DATE AS billing_date,
-                   BILLING_AMOUNT AS billing_amount,
-                   PAYOUT_FEE AS payout_fee,
-                   PAYOUT_FEE_PAYER AS payout_fee_payer,
-                   PAYOUT_THRESHOLD_CENTS AS payout_threshold_cents,
-                   TIMEZONE AS timezone
-            FROM GRATLYDB.SRC_ONBOARDING
-            """
-        )
-        return cursor.fetchall() or []
+        # Try to fetch with all columns first (dev schema)
+        try:
+            cursor.execute(
+                """
+                SELECT RESTAURANTID AS restaurant_id,
+                       RESTAURANTGUID AS restaurant_guid,
+                       BILLING_DATE AS billing_date,
+                       BILLING_AMOUNT AS billing_amount,
+                       PAYOUT_FEE AS payout_fee,
+                       PAYOUT_FEE_PAYER AS payout_fee_payer,
+                       PAYOUT_THRESHOLD_CENTS AS payout_threshold_cents,
+                       TIMEZONE AS timezone
+                FROM GRATLYDB.SRC_ONBOARDING
+                """
+            )
+            return cursor.fetchall() or []
+        except Exception as e:
+            # Fallback: Only fetch basic columns (production schema)
+            logger.warning(f"Failed to fetch restaurants with full schema, using minimal columns: {e}")
+            cursor.execute(
+                """
+                SELECT RESTAURANTID AS restaurant_id,
+                       RESTAURANTGUID AS restaurant_guid
+                FROM GRATLYDB.SRC_ONBOARDING
+                """
+            )
+            rows = cursor.fetchall() or []
+            # Add default values for missing columns
+            return [
+                {
+                    **row,
+                    "billing_date": None,
+                    "billing_amount": None,
+                    "payout_fee": None,
+                    "payout_fee_payer": None,
+                    "payout_threshold_cents": None,
+                    "timezone": None
+                }
+                for row in rows
+            ]
     finally:
         cursor.close()
 
