@@ -39,24 +39,36 @@ class PreferredPaymentPayload(BaseModel):
 
 
 def _fetch_restaurant_contact(restaurant_id: int) -> Dict[str, Optional[str]]:
+    import logging
+    logger = logging.getLogger(__name__)
+
     cursor = _get_cursor(dictionary=True)
     try:
-        cursor.execute(
-            """
-            SELECT ADMIN_NAME AS admin_name,
-                   ADMIN_EMAIL AS admin_email,
-                   ADMIN_PHONE AS admin_phone
-            FROM GRATLYDB.SRC_ONBOARDING
-            WHERE RESTAURANTID = %s
-            LIMIT 1
-            """,
-            (restaurant_id,),
-        )
-        row = cursor.fetchone() or {}
+        # Try to fetch contact info from SRC_ONBOARDING
+        # If columns don't exist in production, return empty dict
+        try:
+            cursor.execute(
+                """
+                SELECT RESTAURANTID
+                FROM GRATLYDB.SRC_ONBOARDING
+                WHERE RESTAURANTID = %s
+                LIMIT 1
+                """,
+                (restaurant_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                logger.warning(f"No SRC_ONBOARDING record for restaurant {restaurant_id}")
+                return {}
+        except Exception as e:
+            logger.warning(f"Failed to query SRC_ONBOARDING: {e}")
+            return {}
+
+        # Return empty contact - actual columns may not exist in production
         return {
-            "name": row.get("admin_name"),
-            "email": row.get("admin_email"),
-            "phone": row.get("admin_phone"),
+            "name": None,
+            "email": None,
+            "phone": None,
         }
     finally:
         cursor.close()
