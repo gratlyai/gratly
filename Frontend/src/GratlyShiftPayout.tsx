@@ -572,10 +572,22 @@ const GratlyFormsSystem: React.FC = () => {
   const payoutPercentTargets = Array.from(
     new Set([...payoutContributors, ...payoutReceivers])
   );
-  const receiverPercentageTotal = payoutPercentTargets.reduce((sum, receiver) => {
-    const value = Number(receiverPercentages[receiver] ?? 0);
-    return sum + (Number.isFinite(value) ? value : 0);
-  }, 0);
+
+  // Calculate contributor percentage (all contributors should have the same percentage)
+  const contributorPercentage = payoutContributors.length > 0
+    ? Number(receiverPercentages[payoutContributors[0]] ?? 0)
+    : 0;
+
+  // Calculate sum of receiver percentages (excluding contributors to avoid double-counting)
+  const receiverPercentageTotal = payoutReceivers
+    .filter(receiver => !payoutContributors.includes(receiver))
+    .reduce((sum, receiver) => {
+      const value = Number(receiverPercentages[receiver] ?? 0);
+      return sum + (Number.isFinite(value) ? value : 0);
+    }, 0);
+
+  // Total should be contributor % + sum of receiver %
+  const totalPercentage = (payoutContributors.length > 0 ? contributorPercentage : 0) + receiverPercentageTotal;
   const resetFormFields = () => {
     setFormName('');
     setStartDate('');
@@ -618,13 +630,28 @@ const GratlyFormsSystem: React.FC = () => {
       setSubmitError('Schedule name is required.');
       return;
     }
-    if (
-      (payoutRule === 'Custom Payout' || payoutRule === 'Job Weighted Payout') &&
-      payoutPercentTargets.length > 0 &&
-      Math.abs(receiverPercentageTotal - 100) > 0.01
-    ) {
-      setSubmitError('Payout percentages must total 100%.');
-      return;
+    // Validate percentages if using Custom or Job Weighted Payout
+    if (payoutRule === 'Custom Payout' || payoutRule === 'Job Weighted Payout') {
+      // Check if there are any contributors or receivers
+      if (payoutPercentTargets.length > 0) {
+        // Validate all contributors have the same percentage
+        if (payoutContributors.length > 1) {
+          const firstContributorPercent = Number(receiverPercentages[payoutContributors[0]] ?? 0);
+          const allContributorsSame = payoutContributors.every(
+            (contributor) => Math.abs(Number(receiverPercentages[contributor] ?? 0) - firstContributorPercent) < 0.01
+          );
+          if (!allContributorsSame) {
+            setSubmitError('All contributors must have the same percentage.');
+            return;
+          }
+        }
+
+        // Validate total percentages = 100%
+        if (Math.abs(totalPercentage - 100) > 0.01) {
+          setSubmitError('Contributor percentage + sum of receiver percentages must total 100%.');
+          return;
+        }
+      }
     }
 
     setIsSubmitting(true);
@@ -1490,38 +1517,98 @@ const GratlyFormsSystem: React.FC = () => {
                         <p className="text-sm text-gray-600">Select payout contributors or receivers to set percentages.</p>
                       ) : (
                         <div className="space-y-3">
-                          {payoutPercentTargets.map((receiver) => (
-                            <div
-                              key={`receiver-percent-${receiver}`}
-                              className="flex items-center justify-between gap-3 rounded-lg border-2 border-gray-300 bg-white px-4 py-3 font-semibold text-gray-900"
-                            >
-                              <span>{receiver}</span>
-                              <span className="flex items-center gap-2">
-                                <input
-                                  type="number"
-                                  min="0"
-                                  max="100"
-                                  step="0.01"
-                                  value={receiverPercentages[receiver] ?? ''}
-                                  onChange={(e) =>
-                                    setReceiverPercentages((prev) => ({
-                                      ...prev,
-                                      [receiver]: e.target.value,
-                                    }))
-                                  }
-                                  className="w-20 px-3 py-1 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 outline-none text-right"
-                                />
-                                <span className="text-sm text-gray-700">%</span>
-                              </span>
+                          {payoutPercentTargets.map((receiver) => {
+                            const isContributor = payoutContributors.includes(receiver);
+                            const isReceiver = payoutReceivers.includes(receiver);
+                            // For contributors, all should show the same percentage (the contributor percentage)
+                            const displayValue = isContributor ? contributorPercentage : (receiverPercentages[receiver] ?? '');
+
+                            return (
+                              <div
+                                key={`receiver-percent-${receiver}`}
+                                className="flex items-center justify-between gap-3 rounded-lg border-2 border-gray-300 bg-white px-4 py-3 font-semibold text-gray-900"
+                              >
+                                <span>
+                                  {receiver}
+                                  {isContributor && (
+                                    <span className="text-xs ml-2 px-3 py-1 rounded-full text-gray-700" style={{ backgroundColor: '#e6d7b8' }}>
+                                      Contributor
+                                    </span>
+                                  )}
+                                  {isReceiver && (
+                                    <span className="text-xs ml-2 px-3 py-1 rounded-full text-gray-700" style={{ backgroundColor: '#e6d7b8' }}>
+                                      Receiver
+                                    </span>
+                                  )}
+                                </span>
+                                <span className="flex items-center gap-2">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    max="100"
+                                    step="0.01"
+                                    value={displayValue}
+                                    onChange={(e) => {
+                                      if (isContributor) {
+                                        // For contributors, update all contributors with the same value
+                                        const newValue = e.target.value;
+                                        setReceiverPercentages((prev) => {
+                                          const updated = { ...prev };
+                                          payoutContributors.forEach((contributor) => {
+                                            updated[contributor] = newValue;
+                                          });
+                                          return updated;
+                                        });
+                                      } else {
+                                        // For receivers, update individually
+                                        setReceiverPercentages((prev) => ({
+                                          ...prev,
+                                          [receiver]: e.target.value,
+                                        }));
+                                      }
+                                    }}
+                                    className="w-20 px-3 py-1 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 outline-none text-right"
+                                  />
+                                  <span className="text-sm text-gray-700">%</span>
+                                </span>
+                              </div>
+                            );
+                          })}
+                          <div className="space-y-2 text-sm text-gray-700 mt-4 pt-4 border-t border-gray-200">
+                            {payoutContributors.length > 0 && (
+                              <div className="flex justify-between">
+                                <span>Contributors:</span>
+                                <span className="font-semibold">{contributorPercentage.toFixed(2)}%</span>
+                              </div>
+                            )}
+                            {payoutReceivers.length > 0 && (
+                              <div className="flex justify-between">
+                                <span>Receivers:</span>
+                                <span className="font-semibold">{receiverPercentageTotal.toFixed(2)}%</span>
+                              </div>
+                            )}
+                            <div className="flex justify-between font-bold text-gray-900">
+                              <span>Total:</span>
+                              <span>{totalPercentage.toFixed(2)}%</span>
                             </div>
-                          ))}
-                          <div className="text-sm text-gray-700">
-                            Total: {receiverPercentageTotal.toFixed(2)}%
                           </div>
-                          {Math.abs(receiverPercentageTotal - 100) > 0.01 && (
-                            <div className="text-sm text-red-600">
-                              Percentages must total 100%.
+                          {Math.abs(totalPercentage - 100) > 0.01 && (
+                            <div className="text-sm text-red-600 mt-2">
+                              Total must equal 100%. (Contributors + Receivers = 100%)
                             </div>
+                          )}
+                          {payoutContributors.length > 1 && (
+                            (() => {
+                              const firstContributorPercent = Number(receiverPercentages[payoutContributors[0]] ?? 0);
+                              const allSame = payoutContributors.every(
+                                (c) => Math.abs(Number(receiverPercentages[c] ?? 0) - firstContributorPercent) < 0.01
+                              );
+                              return !allSame ? (
+                                <div className="text-sm text-red-600 mt-2">
+                                  All contributors must have the same percentage.
+                                </div>
+                              ) : null;
+                            })()
                           )}
                         </div>
                       )}
