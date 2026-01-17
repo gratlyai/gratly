@@ -1198,8 +1198,10 @@ export default function Reconciliation() {
                                           receiverRoleCount > 0
                                             ? rolePercentageTotal / receiverRoleCount
                                             : 0;
-                                        const receiverPayoutPercentage = isManualReceiver(contributor)
-                                          ? Number(contributor.payoutPercentage || 0)
+                                        // Use individual payoutPercentage if set (allows per-employee overrides)
+                                        const individualPct = Number(contributor.payoutPercentage || 0);
+                                        const receiverPayoutPercentage = individualPct > 0
+                                          ? individualPct
                                           : receiverSharePercentage;
                                         const hasHoursWorked =
                                           isManualReceiver(contributor) ||
