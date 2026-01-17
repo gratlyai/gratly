@@ -306,7 +306,9 @@ export default function Reconciliation() {
       const roleTotal = receiverRolePercentages[roleKey] ?? 0;
       const roleCount = receiverRoleCounts[roleKey] ?? 0;
       const sharePercentage = roleCount > 0 ? roleTotal / roleCount : 0;
-      const receiverPct = isManual ? Number(receiver.payoutPercentage || 0) : sharePercentage;
+      // Use receiver's individual payoutPercentage if set (allows per-employee overrides during edit)
+      const individualPct = Number(receiver.payoutPercentage || 0);
+      const receiverPct = individualPct > 0 ? individualPct : sharePercentage;
       const payoutAmount = (receiverPct / 100) * (overallTips + overallGratuity);
       if (payoutAmount > 0) {
         receiverPercentages.push({ receiver, percentage: receiverPct });
@@ -342,8 +344,10 @@ export default function Reconciliation() {
       const rolePercentageTotal = receiverRolePercentages[receiverRoleKey] ?? 0;
       const receiverSharePercentage =
         !isContributor && receiverRoleCount > 0 ? rolePercentageTotal / receiverRoleCount : 0;
-      const receiverPayoutPercentage = isManual
-        ? Number(item.payoutPercentage || 0)
+      // Use individual payoutPercentage if set (allows per-employee overrides during edit)
+      const individualReceiverPct = Number(item.payoutPercentage || 0);
+      const receiverPayoutPercentage = !isContributor && individualReceiverPct > 0
+        ? individualReceiverPct
         : receiverSharePercentage;
 
       const tipTotal = Number(item.totalTips || 0) + Number(item.totalGratuity || 0);
@@ -475,9 +479,9 @@ export default function Reconciliation() {
       const roleTotal = receiverRolePercentages[roleKey] ?? 0;
       const roleCount = receiverRoleCounts[roleKey] ?? 0;
       const share = roleCount > 0 ? roleTotal / roleCount : 0;
-      const receiverPercentage = isManualReceiver(receiver)
-        ? Number(receiver.payoutPercentage || 0)
-        : share;
+      // Use individual payoutPercentage if set (allows per-employee overrides during edit)
+      const individualPct = Number(receiver.payoutPercentage || 0);
+      const receiverPercentage = individualPct > 0 ? individualPct : share;
       const payoutAmount =
         (receiverPercentage / 100) * (Number(overallTips || 0) + Number(overallGratuity || 0));
       if (payoutAmount <= 0) {
