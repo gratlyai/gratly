@@ -1970,7 +1970,13 @@ def save_approval_overrides(payload: ApprovalOverridePayload):
 
             updates_made = 0
             for item in payload.items:
-                # Update NET_PAYOUT
+                # Normalize employeeGuid and jobTitle to empty string if None
+                emp_guid = item.employeeGuid if item.employeeGuid else ""
+                job_title = item.jobTitle if item.jobTitle else ""
+
+                logger.info(f"  Processing item: guid='{emp_guid}', job='{job_title}', name={item.employeeName}")
+
+                # Update NET_PAYOUT using IFNULL for proper NULL handling
                 new_net = str(item.netPayout) if item.netPayout is not None else "0"
                 cursor.execute(
                     """
@@ -1978,26 +1984,20 @@ def save_approval_overrides(payload: ApprovalOverridePayload):
                     SET NEW_VALUE = %s
                     WHERE PAYOUT_SCHEDULEID = %s
                       AND BUSINESSDATE = %s
-                      AND (EMPLOYEEGUID = %s OR (EMPLOYEEGUID IS NULL AND %s IS NULL))
-                      AND (JOBTITLE = %s OR (JOBTITLE IS NULL AND %s IS NULL))
+                      AND IFNULL(EMPLOYEEGUID, '') = %s
+                      AND IFNULL(JOBTITLE, '') = %s
                       AND FIELD_NAME = 'NET_PAYOUT'
                       AND CHANGE_TYPE = 'INITIAL_SNAPSHOT'
                     """,
-                    (
-                        new_net,
-                        payload.payoutScheduleId,
-                        payload.businessDate,
-                        item.employeeGuid,
-                        item.employeeGuid,
-                        item.jobTitle,
-                        item.jobTitle,
-                    ),
+                    (new_net, payload.payoutScheduleId, payload.businessDate, emp_guid, job_title),
                 )
                 if cursor.rowcount > 0:
                     updates_made += cursor.rowcount
-                    logger.info(f"  Updated NET_PAYOUT for {item.employeeName}: NEW_VALUE={new_net}")
+                    logger.info(f"    Updated NET_PAYOUT: NEW_VALUE={new_net}, rows={cursor.rowcount}")
+                else:
+                    logger.warning(f"    No NET_PAYOUT record found to update for {item.employeeName}")
 
-                # Update PAYOUT_PERCENTAGE
+                # Update PAYOUT_PERCENTAGE using IFNULL for proper NULL handling
                 new_pct = str(item.payoutPercentage) if item.payoutPercentage is not None else "0"
                 cursor.execute(
                     """
@@ -2005,24 +2005,18 @@ def save_approval_overrides(payload: ApprovalOverridePayload):
                     SET NEW_VALUE = %s
                     WHERE PAYOUT_SCHEDULEID = %s
                       AND BUSINESSDATE = %s
-                      AND (EMPLOYEEGUID = %s OR (EMPLOYEEGUID IS NULL AND %s IS NULL))
-                      AND (JOBTITLE = %s OR (JOBTITLE IS NULL AND %s IS NULL))
+                      AND IFNULL(EMPLOYEEGUID, '') = %s
+                      AND IFNULL(JOBTITLE, '') = %s
                       AND FIELD_NAME = 'PAYOUT_PERCENTAGE'
                       AND CHANGE_TYPE = 'INITIAL_SNAPSHOT'
                     """,
-                    (
-                        new_pct,
-                        payload.payoutScheduleId,
-                        payload.businessDate,
-                        item.employeeGuid,
-                        item.employeeGuid,
-                        item.jobTitle,
-                        item.jobTitle,
-                    ),
+                    (new_pct, payload.payoutScheduleId, payload.businessDate, emp_guid, job_title),
                 )
                 if cursor.rowcount > 0:
                     updates_made += cursor.rowcount
-                    logger.info(f"  Updated PAYOUT_PERCENTAGE for {item.employeeName}: NEW_VALUE={new_pct}")
+                    logger.info(f"    Updated PAYOUT_PERCENTAGE: NEW_VALUE={new_pct}, rows={cursor.rowcount}")
+                else:
+                    logger.warning(f"    No PAYOUT_PERCENTAGE record found to update for {item.employeeName}")
 
             logger.info(f"=== UPDATE COMPLETE === Total updates: {updates_made}")
 
