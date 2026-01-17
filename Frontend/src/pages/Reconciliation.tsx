@@ -1935,9 +1935,13 @@ export default function Reconciliation() {
                                       businessDate: null,
                                     };
 
-                                    setSchedules((current) =>
-                                      current.map((scheduleItem) => {
+                                    console.log("DEBUG scheduleKey:", scheduleKey);
+                                    console.log("DEBUG current schedules count:", schedules.length);
+                                    setSchedules((current) => {
+                                      console.log("DEBUG inside setSchedules, current count:", current.length);
+                                      return current.map((scheduleItem) => {
                                         const itemKey = `${scheduleItem.payoutScheduleId}-${scheduleItem.businessDate}`;
+                                        console.log("DEBUG comparing:", { itemKey, scheduleKey, matches: itemKey === scheduleKey });
                                         if (itemKey !== scheduleKey) {
                                           return scheduleItem;
                                         }
@@ -2208,8 +2212,8 @@ export default function Reconciliation() {
                                           ...normalizedSchedule,
                                           contributors: recalculatedContributors,
                                         };
-                                      }),
-                                    );
+                                      });
+                                    });
 
                                     // Perform the async save after state update
                                     console.log("DEBUG Save check:", {
