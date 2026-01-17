@@ -2018,7 +2018,7 @@ def save_approval_overrides(payload: ApprovalOverridePayload):
                         INSERT INTO GRATLYDB.PAYOUT_APPROVAL_HISTORY (
                             PAYOUT_APPROVALID, RESTAURANTID, PAYOUT_SCHEDULEID, BUSINESSDATE,
                             EMPLOYEEGUID, EMPLOYEE_NAME, JOBTITLE, FIELD_NAME,
-                            OLD_VALUE, NEW_VALUE, USERID, CHANGE_TYPE
+                            OLD_VALUE, NEW_VALUE, CHANGED_BY_USERID, CHANGE_TYPE
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (approval_id, payload.restaurantId, payload.payoutScheduleId, payload.businessDate,
@@ -2053,7 +2053,7 @@ def save_approval_overrides(payload: ApprovalOverridePayload):
                         INSERT INTO GRATLYDB.PAYOUT_APPROVAL_HISTORY (
                             PAYOUT_APPROVALID, RESTAURANTID, PAYOUT_SCHEDULEID, BUSINESSDATE,
                             EMPLOYEEGUID, EMPLOYEE_NAME, JOBTITLE, FIELD_NAME,
-                            OLD_VALUE, NEW_VALUE, USERID, CHANGE_TYPE
+                            OLD_VALUE, NEW_VALUE, CHANGED_BY_USERID, CHANGE_TYPE
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (approval_id, payload.restaurantId, payload.payoutScheduleId, payload.businessDate,
