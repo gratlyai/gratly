@@ -712,7 +712,10 @@ const GratlyFormsSystem: React.FC = () => {
       {activeView === 'existing' ? (
         <div>
           <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-            <h1 className="text-3xl font-bold text-gray-900">Shift Payout Schedules</h1>
+            <div>
+              <h1 className="text-3xl font-bold text-gray-900">Shift Payout Schedules</h1>
+              <p className="text-sm text-gray-500">Create and manage shift payout schedules for your team.</p>
+            </div>
             <div className="flex items-center gap-3">
               <button
                 type="button"
