@@ -1966,15 +1966,32 @@ def save_approval_overrides(payload: ApprovalOverridePayload):
             )
 
             # Save NEW_VALUE to PAYOUT_APPROVAL_HISTORY for each item
-            # Use INSERT ... ON DUPLICATE KEY UPDATE to ensure the record is always saved
             logger.info(f"=== SAVING NEW_VALUE === schedule={payload.payoutScheduleId}, date={payload.businessDate}, items={len(payload.items)}")
+
+            # DEBUG: First, let's see what records exist in the database
+            cursor.execute(
+                """
+                SELECT EMPLOYEEGUID, JOBTITLE, FIELD_NAME, OLD_VALUE, NEW_VALUE
+                FROM GRATLYDB.PAYOUT_APPROVAL_HISTORY
+                WHERE PAYOUT_SCHEDULEID = %s
+                  AND BUSINESSDATE = %s
+                  AND CHANGE_TYPE = 'INITIAL_SNAPSHOT'
+                """,
+                (payload.payoutScheduleId, payload.businessDate),
+            )
+            existing_records = cursor.fetchall()
+            logger.info(f"  DEBUG: Found {len(existing_records)} existing INITIAL_SNAPSHOT records in DB:")
+            for rec in existing_records:
+                logger.info(f"    DB record: guid={rec['EMPLOYEEGUID']}, job={rec['JOBTITLE']}, field={rec['FIELD_NAME']}, old={rec['OLD_VALUE']}, new={rec['NEW_VALUE']}")
 
             records_saved = 0
             for item in payload.items:
                 new_net = str(item.netPayout) if item.netPayout is not None else "0"
                 new_pct = str(item.payoutPercentage) if item.payoutPercentage is not None else "0"
 
-                logger.info(f"  Saving: {item.employeeName}, guid={item.employeeGuid}, job={item.jobTitle}, net={new_net}, pct={new_pct}")
+                logger.info(f"  Saving: name={item.employeeName}")
+                logger.info(f"    Payload values: guid='{item.employeeGuid}' (type={type(item.employeeGuid).__name__}), job='{item.jobTitle}' (type={type(item.jobTitle).__name__})")
+                logger.info(f"    Values to save: net={new_net}, pct={new_pct}")
 
                 # Save NET_PAYOUT - try UPDATE first, then INSERT if no rows affected
                 cursor.execute(
