@@ -2212,6 +2212,14 @@ export default function Reconciliation() {
                                     );
 
                                     // Perform the async save after state update
+                                    console.log("DEBUG Save check:", {
+                                      hasPayloadItems: !!saveData.payloadItems,
+                                      payloadItemsCount: saveData.payloadItems?.length,
+                                      scheduleId: saveData.scheduleId,
+                                      businessDate: saveData.businessDate,
+                                      userId,
+                                      restaurantId,
+                                    });
                                     if (saveData.payloadItems && saveData.scheduleId && saveData.businessDate && userId !== null) {
                                       console.log("Saving approval overrides:", {
                                         restaurantId,
@@ -2232,6 +2240,8 @@ export default function Reconciliation() {
                                         return;
                                       }
                                       console.log("Save successful");
+                                    } else {
+                                      console.log("DEBUG Save skipped - condition not met");
                                     }
 
                                     setEditingScheduleKey(null);
