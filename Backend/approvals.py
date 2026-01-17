@@ -1655,6 +1655,63 @@ def get_approvals(
                 )
                 schedule["contributors"] = updated_contributors
 
+        # Apply NEW_VALUE from PAYOUT_APPROVAL_HISTORY to override calculated values
+        for schedule in schedule_map.values():
+            if not schedule.get("contributors"):
+                continue
+
+            # Fetch NEW_VALUE records from history for this schedule
+            cursor.execute(
+                """
+                SELECT EMPLOYEEGUID, JOBTITLE, FIELD_NAME, NEW_VALUE
+                FROM GRATLYDB.PAYOUT_APPROVAL_HISTORY
+                WHERE PAYOUT_SCHEDULEID = %s
+                  AND BUSINESSDATE = %s
+                  AND CHANGE_TYPE = 'INITIAL_SNAPSHOT'
+                  AND NEW_VALUE IS NOT NULL
+                """,
+                (schedule["payoutScheduleId"], schedule["businessDate"]),
+            )
+            history_rows = cursor.fetchall()
+
+            if history_rows:
+                # Build lookup: (employeeGuid, jobTitle, fieldName) -> newValue
+                history_values = {}
+                for row in history_rows:
+                    key = (
+                        row["EMPLOYEEGUID"] or "",
+                        row["JOBTITLE"] or "",
+                        row["FIELD_NAME"],
+                    )
+                    history_values[key] = row["NEW_VALUE"]
+
+                logger.info(f"Found {len(history_values)} NEW_VALUE records for schedule {schedule['payoutScheduleId']}")
+
+                # Apply NEW_VALUE to contributors
+                for contributor in schedule["contributors"]:
+                    emp_guid = contributor.get("employeeGuid") or ""
+                    job_title = contributor.get("jobTitle") or ""
+
+                    # Check for NET_PAYOUT override
+                    net_key = (emp_guid, job_title, "NET_PAYOUT")
+                    if net_key in history_values:
+                        try:
+                            new_net = float(history_values[net_key])
+                            contributor["netPayout"] = new_net
+                            logger.info(f"  Applied NEW_VALUE netPayout={new_net} for {contributor.get('employeeName')}")
+                        except (ValueError, TypeError):
+                            pass
+
+                    # Check for PAYOUT_PERCENTAGE override
+                    pct_key = (emp_guid, job_title, "PAYOUT_PERCENTAGE")
+                    if pct_key in history_values:
+                        try:
+                            new_pct = float(history_values[pct_key])
+                            contributor["payoutPercentage"] = new_pct
+                            logger.info(f"  Applied NEW_VALUE payoutPercentage={new_pct} for {contributor.get('employeeName')}")
+                        except (ValueError, TypeError):
+                            pass
+
         schedules = list(schedule_map.values())
         schedules = [schedule for schedule in schedules if not schedule.get("isApproved")]
         return {"schedules": schedules}
@@ -1908,120 +1965,66 @@ def save_approval_overrides(payload: ApprovalOverridePayload):
                 rows,
             )
 
-            # Record changes in PAYOUT_APPROVAL_HISTORY
-            # Get the initial snapshot values to compare
-            cursor.execute(
-                """
-                SELECT EMPLOYEEGUID, JOBTITLE, FIELD_NAME, OLD_VALUE
-                FROM GRATLYDB.PAYOUT_APPROVAL_HISTORY
-                WHERE PAYOUT_SCHEDULEID = %s
-                  AND BUSINESSDATE = %s
-                  AND CHANGE_TYPE = 'INITIAL_SNAPSHOT'
-                """,
-                (payload.payoutScheduleId, payload.businessDate),
-            )
-            snapshot_rows = cursor.fetchall()
-            logger.info(f"Found {len(snapshot_rows)} INITIAL_SNAPSHOT rows for schedule {payload.payoutScheduleId}, date {payload.businessDate}")
+            # Update PAYOUT_APPROVAL_HISTORY with NEW_VALUE for each item
+            logger.info(f"=== UPDATING NEW_VALUE === schedule={payload.payoutScheduleId}, date={payload.businessDate}")
 
-            # Build a lookup of initial values: (employeeGuid, jobTitle, fieldName) -> oldValue
-            # Normalize None to empty string for consistent key matching
-            initial_values = {}
-            for snap_row in snapshot_rows:
-                emp_guid = snap_row["EMPLOYEEGUID"] or ""
-                job_title = snap_row["JOBTITLE"] or ""
-                field_name = snap_row["FIELD_NAME"] or ""
-                key = (emp_guid, job_title, field_name)
-                initial_values[key] = snap_row["OLD_VALUE"]
-                logger.debug(f"Snapshot key: {key}, value: {snap_row['OLD_VALUE']}")
-
-            # Compare and record changes
-            change_records = []
+            updates_made = 0
             for item in payload.items:
-                # Normalize None to empty string for key matching
-                item_emp_guid = item.employeeGuid or ""
-                item_job_title = item.jobTitle or ""
-
-                # Check NET_PAYOUT changes
-                net_key = (item_emp_guid, item_job_title, "NET_PAYOUT")
-                logger.debug(f"Looking for net_key: {net_key}, exists: {net_key in initial_values}")
-                if net_key in initial_values:
-                    old_net = initial_values[net_key]
-                    new_net = str(item.netPayout) if item.netPayout is not None else "0"
-                    # Compare as floats to avoid string comparison issues
-                    try:
-                        old_float = float(old_net) if old_net else 0
-                        new_float = float(new_net) if new_net else 0
-                        if abs(old_float - new_float) > 0.01:  # Changed by more than 1 cent
-                            change_records.append((
-                                approval_id,
-                                None,  # PAYOUT_APPROVAL_ITEMID
-                                payload.restaurantId,
-                                payload.payoutScheduleId,
-                                payload.businessDate,
-                                item.employeeGuid,
-                                item.employeeName,
-                                item.jobTitle,
-                                "NET_PAYOUT",
-                                old_net,
-                                new_net,
-                                payload.userId,
-                                "EDIT",
-                            ))
-                    except (ValueError, TypeError):
-                        pass
-
-                # Check PAYOUT_PERCENTAGE changes
-                pct_key = (item_emp_guid, item_job_title, "PAYOUT_PERCENTAGE")
-                logger.debug(f"Looking for pct_key: {pct_key}, exists: {pct_key in initial_values}")
-                if pct_key in initial_values:
-                    old_pct = initial_values[pct_key]
-                    new_pct = str(item.payoutPercentage) if item.payoutPercentage is not None else "0"
-                    try:
-                        old_float = float(old_pct) if old_pct else 0
-                        new_float = float(new_pct) if new_pct else 0
-                        if abs(old_float - new_float) > 0.01:
-                            change_records.append((
-                                approval_id,
-                                None,
-                                payload.restaurantId,
-                                payload.payoutScheduleId,
-                                payload.businessDate,
-                                item.employeeGuid,
-                                item.employeeName,
-                                item.jobTitle,
-                                "PAYOUT_PERCENTAGE",
-                                old_pct,
-                                new_pct,
-                                payload.userId,
-                                "EDIT",
-                            ))
-                    except (ValueError, TypeError):
-                        pass
-
-            # Insert change records
-            logger.info(f"Recording {len(change_records)} change(s) to PAYOUT_APPROVAL_HISTORY")
-            if change_records:
-                cursor.executemany(
+                # Update NET_PAYOUT
+                new_net = str(item.netPayout) if item.netPayout is not None else "0"
+                cursor.execute(
                     """
-                    INSERT INTO GRATLYDB.PAYOUT_APPROVAL_HISTORY (
-                        PAYOUT_APPROVALID,
-                        PAYOUT_APPROVAL_ITEMID,
-                        RESTAURANTID,
-                        PAYOUT_SCHEDULEID,
-                        BUSINESSDATE,
-                        EMPLOYEEGUID,
-                        EMPLOYEE_NAME,
-                        JOBTITLE,
-                        FIELD_NAME,
-                        OLD_VALUE,
-                        NEW_VALUE,
-                        CHANGED_BY_USERID,
-                        CHANGE_TYPE
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    UPDATE GRATLYDB.PAYOUT_APPROVAL_HISTORY
+                    SET NEW_VALUE = %s
+                    WHERE PAYOUT_SCHEDULEID = %s
+                      AND BUSINESSDATE = %s
+                      AND (EMPLOYEEGUID = %s OR (EMPLOYEEGUID IS NULL AND %s IS NULL))
+                      AND (JOBTITLE = %s OR (JOBTITLE IS NULL AND %s IS NULL))
+                      AND FIELD_NAME = 'NET_PAYOUT'
+                      AND CHANGE_TYPE = 'INITIAL_SNAPSHOT'
                     """,
-                    change_records,
+                    (
+                        new_net,
+                        payload.payoutScheduleId,
+                        payload.businessDate,
+                        item.employeeGuid,
+                        item.employeeGuid,
+                        item.jobTitle,
+                        item.jobTitle,
+                    ),
                 )
+                if cursor.rowcount > 0:
+                    updates_made += cursor.rowcount
+                    logger.info(f"  Updated NET_PAYOUT for {item.employeeName}: NEW_VALUE={new_net}")
+
+                # Update PAYOUT_PERCENTAGE
+                new_pct = str(item.payoutPercentage) if item.payoutPercentage is not None else "0"
+                cursor.execute(
+                    """
+                    UPDATE GRATLYDB.PAYOUT_APPROVAL_HISTORY
+                    SET NEW_VALUE = %s
+                    WHERE PAYOUT_SCHEDULEID = %s
+                      AND BUSINESSDATE = %s
+                      AND (EMPLOYEEGUID = %s OR (EMPLOYEEGUID IS NULL AND %s IS NULL))
+                      AND (JOBTITLE = %s OR (JOBTITLE IS NULL AND %s IS NULL))
+                      AND FIELD_NAME = 'PAYOUT_PERCENTAGE'
+                      AND CHANGE_TYPE = 'INITIAL_SNAPSHOT'
+                    """,
+                    (
+                        new_pct,
+                        payload.payoutScheduleId,
+                        payload.businessDate,
+                        item.employeeGuid,
+                        item.employeeGuid,
+                        item.jobTitle,
+                        item.jobTitle,
+                    ),
+                )
+                if cursor.rowcount > 0:
+                    updates_made += cursor.rowcount
+                    logger.info(f"  Updated PAYOUT_PERCENTAGE for {item.employeeName}: NEW_VALUE={new_pct}")
+
+            logger.info(f"=== UPDATE COMPLETE === Total updates: {updates_made}")
 
         conn.commit()
         return {"success": True, "approval_id": approval_id}
@@ -2039,6 +2042,10 @@ def save_approval_snapshot(payload: ApprovalSnapshotPayload):
     This creates an audit trail for reconciliation purposes.
     Only inserts records that don't already have a snapshot for this schedule/date.
     """
+    logger.info(f"=== SNAPSHOT SAVE START === schedule={payload.payoutScheduleId}, date={payload.businessDate}, items={len(payload.items)}")
+    for item in payload.items:
+        logger.info(f"  Snapshot item: guid={item.employeeGuid}, job={item.jobTitle}, field={item.fieldName}, value={item.currentValue}")
+
     cursor = _get_cursor(dictionary=True)
     conn = cursor.connection
     try:
