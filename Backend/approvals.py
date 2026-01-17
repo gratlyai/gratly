@@ -1965,60 +1965,88 @@ def save_approval_overrides(payload: ApprovalOverridePayload):
                 rows,
             )
 
-            # Update PAYOUT_APPROVAL_HISTORY with NEW_VALUE for each item
-            logger.info(f"=== UPDATING NEW_VALUE === schedule={payload.payoutScheduleId}, date={payload.businessDate}")
+            # Save NEW_VALUE to PAYOUT_APPROVAL_HISTORY for each item
+            # Use INSERT ... ON DUPLICATE KEY UPDATE to ensure the record is always saved
+            logger.info(f"=== SAVING NEW_VALUE === schedule={payload.payoutScheduleId}, date={payload.businessDate}, items={len(payload.items)}")
 
-            updates_made = 0
+            records_saved = 0
             for item in payload.items:
-                # Normalize employeeGuid and jobTitle to empty string if None
-                emp_guid = item.employeeGuid if item.employeeGuid else ""
-                job_title = item.jobTitle if item.jobTitle else ""
-
-                logger.info(f"  Processing item: guid='{emp_guid}', job='{job_title}', name={item.employeeName}")
-
-                # Update NET_PAYOUT using IFNULL for proper NULL handling
                 new_net = str(item.netPayout) if item.netPayout is not None else "0"
+                new_pct = str(item.payoutPercentage) if item.payoutPercentage is not None else "0"
+
+                logger.info(f"  Saving: {item.employeeName}, guid={item.employeeGuid}, job={item.jobTitle}, net={new_net}, pct={new_pct}")
+
+                # Save NET_PAYOUT - try UPDATE first, then INSERT if no rows affected
                 cursor.execute(
                     """
                     UPDATE GRATLYDB.PAYOUT_APPROVAL_HISTORY
                     SET NEW_VALUE = %s
                     WHERE PAYOUT_SCHEDULEID = %s
                       AND BUSINESSDATE = %s
-                      AND IFNULL(EMPLOYEEGUID, '') = %s
-                      AND IFNULL(JOBTITLE, '') = %s
+                      AND ((EMPLOYEEGUID = %s) OR (EMPLOYEEGUID IS NULL AND %s IS NULL))
+                      AND ((JOBTITLE = %s) OR (JOBTITLE IS NULL AND %s IS NULL))
                       AND FIELD_NAME = 'NET_PAYOUT'
                       AND CHANGE_TYPE = 'INITIAL_SNAPSHOT'
                     """,
-                    (new_net, payload.payoutScheduleId, payload.businessDate, emp_guid, job_title),
+                    (new_net, payload.payoutScheduleId, payload.businessDate,
+                     item.employeeGuid, item.employeeGuid, item.jobTitle, item.jobTitle),
                 )
                 if cursor.rowcount > 0:
-                    updates_made += cursor.rowcount
-                    logger.info(f"    Updated NET_PAYOUT: NEW_VALUE={new_net}, rows={cursor.rowcount}")
+                    records_saved += 1
+                    logger.info(f"    Updated NET_PAYOUT: {new_net}")
                 else:
-                    logger.warning(f"    No NET_PAYOUT record found to update for {item.employeeName}")
+                    # No existing record, INSERT new one
+                    cursor.execute(
+                        """
+                        INSERT INTO GRATLYDB.PAYOUT_APPROVAL_HISTORY (
+                            PAYOUT_APPROVALID, RESTAURANTID, PAYOUT_SCHEDULEID, BUSINESSDATE,
+                            EMPLOYEEGUID, EMPLOYEE_NAME, JOBTITLE, FIELD_NAME,
+                            OLD_VALUE, NEW_VALUE, USERID, CHANGE_TYPE
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (approval_id, payload.restaurantId, payload.payoutScheduleId, payload.businessDate,
+                         item.employeeGuid, item.employeeName, item.jobTitle, 'NET_PAYOUT',
+                         new_net, new_net, payload.userId, 'INITIAL_SNAPSHOT'),
+                    )
+                    records_saved += 1
+                    logger.info(f"    Inserted NET_PAYOUT: {new_net}")
 
-                # Update PAYOUT_PERCENTAGE using IFNULL for proper NULL handling
-                new_pct = str(item.payoutPercentage) if item.payoutPercentage is not None else "0"
+                # Save PAYOUT_PERCENTAGE - try UPDATE first, then INSERT if no rows affected
                 cursor.execute(
                     """
                     UPDATE GRATLYDB.PAYOUT_APPROVAL_HISTORY
                     SET NEW_VALUE = %s
                     WHERE PAYOUT_SCHEDULEID = %s
                       AND BUSINESSDATE = %s
-                      AND IFNULL(EMPLOYEEGUID, '') = %s
-                      AND IFNULL(JOBTITLE, '') = %s
+                      AND ((EMPLOYEEGUID = %s) OR (EMPLOYEEGUID IS NULL AND %s IS NULL))
+                      AND ((JOBTITLE = %s) OR (JOBTITLE IS NULL AND %s IS NULL))
                       AND FIELD_NAME = 'PAYOUT_PERCENTAGE'
                       AND CHANGE_TYPE = 'INITIAL_SNAPSHOT'
                     """,
-                    (new_pct, payload.payoutScheduleId, payload.businessDate, emp_guid, job_title),
+                    (new_pct, payload.payoutScheduleId, payload.businessDate,
+                     item.employeeGuid, item.employeeGuid, item.jobTitle, item.jobTitle),
                 )
                 if cursor.rowcount > 0:
-                    updates_made += cursor.rowcount
-                    logger.info(f"    Updated PAYOUT_PERCENTAGE: NEW_VALUE={new_pct}, rows={cursor.rowcount}")
+                    records_saved += 1
+                    logger.info(f"    Updated PAYOUT_PERCENTAGE: {new_pct}")
                 else:
-                    logger.warning(f"    No PAYOUT_PERCENTAGE record found to update for {item.employeeName}")
+                    # No existing record, INSERT new one
+                    cursor.execute(
+                        """
+                        INSERT INTO GRATLYDB.PAYOUT_APPROVAL_HISTORY (
+                            PAYOUT_APPROVALID, RESTAURANTID, PAYOUT_SCHEDULEID, BUSINESSDATE,
+                            EMPLOYEEGUID, EMPLOYEE_NAME, JOBTITLE, FIELD_NAME,
+                            OLD_VALUE, NEW_VALUE, USERID, CHANGE_TYPE
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (approval_id, payload.restaurantId, payload.payoutScheduleId, payload.businessDate,
+                         item.employeeGuid, item.employeeName, item.jobTitle, 'PAYOUT_PERCENTAGE',
+                         new_pct, new_pct, payload.userId, 'INITIAL_SNAPSHOT'),
+                    )
+                    records_saved += 1
+                    logger.info(f"    Inserted PAYOUT_PERCENTAGE: {new_pct}")
 
-            logger.info(f"=== UPDATE COMPLETE === Total updates: {updates_made}")
+            logger.info(f"=== SAVE COMPLETE === Total records: {records_saved}")
 
         conn.commit()
         return {"success": True, "approval_id": approval_id}
