@@ -85,6 +85,7 @@ export type ApprovalOverridePayload = {
   restaurantId: number;
   payoutScheduleId: number;
   businessDate: string;
+  userId: number;
   items: ApprovalOverrideItemPayload[];
 };
 

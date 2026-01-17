@@ -740,6 +740,7 @@ export default function Reconciliation() {
                             restaurantId,
                             payoutScheduleId: schedule.payoutScheduleId,
                             businessDate: schedule.businessDate,
+                            userId,
                             items: payloadItems,
                           });
                           const approvalResponse = await approvePayoutSchedule({
@@ -2167,11 +2168,12 @@ export default function Reconciliation() {
                                         };
                                         // Calculate the final values with proper deductions
                                         const payloadItems = buildApprovalItems(normalizedSchedule);
-                                        if (normalizedSchedule.businessDate) {
+                                        if (normalizedSchedule.businessDate && userId !== null) {
                                           saveApprovalOverrides({
                                             restaurantId,
                                             payoutScheduleId: normalizedSchedule.payoutScheduleId,
                                             businessDate: normalizedSchedule.businessDate,
+                                            userId,
                                             items: payloadItems,
                                           });
                                         }

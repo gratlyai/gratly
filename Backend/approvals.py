@@ -44,6 +44,7 @@ class ApprovalOverridePayload(BaseModel):
     restaurantId: int
     payoutScheduleId: int
     businessDate: str
+    userId: int
     items: List[ApprovalOverrideItem]
 
 class ApprovalFinalizePayload(BaseModel):
@@ -1906,6 +1907,108 @@ def save_approval_overrides(payload: ApprovalOverridePayload):
                 """,
                 rows,
             )
+
+            # Record changes in PAYOUT_APPROVAL_HISTORY
+            # Get the initial snapshot values to compare
+            cursor.execute(
+                """
+                SELECT EMPLOYEEGUID, JOBTITLE, FIELD_NAME, OLD_VALUE
+                FROM GRATLYDB.PAYOUT_APPROVAL_HISTORY
+                WHERE PAYOUT_SCHEDULEID = %s
+                  AND BUSINESSDATE = %s
+                  AND CHANGE_TYPE = 'INITIAL_SNAPSHOT'
+                """,
+                (payload.payoutScheduleId, payload.businessDate),
+            )
+            snapshot_rows = cursor.fetchall()
+
+            # Build a lookup of initial values: (employeeGuid, jobTitle, fieldName) -> oldValue
+            initial_values = {}
+            for snap_row in snapshot_rows:
+                key = (snap_row["EMPLOYEEGUID"], snap_row["JOBTITLE"], snap_row["FIELD_NAME"])
+                initial_values[key] = snap_row["OLD_VALUE"]
+
+            # Compare and record changes
+            change_records = []
+            for item in payload.items:
+                # Check NET_PAYOUT changes
+                net_key = (item.employeeGuid, item.jobTitle, "NET_PAYOUT")
+                if net_key in initial_values:
+                    old_net = initial_values[net_key]
+                    new_net = str(item.netPayout) if item.netPayout is not None else "0"
+                    # Compare as floats to avoid string comparison issues
+                    try:
+                        old_float = float(old_net) if old_net else 0
+                        new_float = float(new_net) if new_net else 0
+                        if abs(old_float - new_float) > 0.01:  # Changed by more than 1 cent
+                            change_records.append((
+                                approval_id,
+                                None,  # PAYOUT_APPROVAL_ITEMID
+                                payload.restaurantId,
+                                payload.payoutScheduleId,
+                                payload.businessDate,
+                                item.employeeGuid,
+                                item.employeeName,
+                                item.jobTitle,
+                                "NET_PAYOUT",
+                                old_net,
+                                new_net,
+                                payload.userId,
+                                "EDIT",
+                            ))
+                    except (ValueError, TypeError):
+                        pass
+
+                # Check PAYOUT_PERCENTAGE changes
+                pct_key = (item.employeeGuid, item.jobTitle, "PAYOUT_PERCENTAGE")
+                if pct_key in initial_values:
+                    old_pct = initial_values[pct_key]
+                    new_pct = str(item.payoutPercentage) if item.payoutPercentage is not None else "0"
+                    try:
+                        old_float = float(old_pct) if old_pct else 0
+                        new_float = float(new_pct) if new_pct else 0
+                        if abs(old_float - new_float) > 0.01:
+                            change_records.append((
+                                approval_id,
+                                None,
+                                payload.restaurantId,
+                                payload.payoutScheduleId,
+                                payload.businessDate,
+                                item.employeeGuid,
+                                item.employeeName,
+                                item.jobTitle,
+                                "PAYOUT_PERCENTAGE",
+                                old_pct,
+                                new_pct,
+                                payload.userId,
+                                "EDIT",
+                            ))
+                    except (ValueError, TypeError):
+                        pass
+
+            # Insert change records
+            if change_records:
+                cursor.executemany(
+                    """
+                    INSERT INTO GRATLYDB.PAYOUT_APPROVAL_HISTORY (
+                        PAYOUT_APPROVALID,
+                        PAYOUT_APPROVAL_ITEMID,
+                        RESTAURANTID,
+                        PAYOUT_SCHEDULEID,
+                        BUSINESSDATE,
+                        EMPLOYEEGUID,
+                        EMPLOYEE_NAME,
+                        JOBTITLE,
+                        FIELD_NAME,
+                        OLD_VALUE,
+                        NEW_VALUE,
+                        CHANGED_BY_USERID,
+                        CHANGE_TYPE
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    change_records,
+                )
 
         conn.commit()
         return {"success": True, "approval_id": approval_id}
