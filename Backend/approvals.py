@@ -2037,6 +2037,7 @@ def save_approval_snapshot(payload: ApprovalSnapshotPayload):
     """
     Save a snapshot of the current approval state before editing.
     This creates an audit trail for reconciliation purposes.
+    Only inserts records that don't already have a snapshot for this schedule/date.
     """
     cursor = _get_cursor(dictionary=True)
     conn = cursor.connection
@@ -2056,8 +2057,46 @@ def save_approval_snapshot(payload: ApprovalSnapshotPayload):
         approval_row = cursor.fetchone()
         approval_id = approval_row["approval_id"] if approval_row else None
 
-        # Insert snapshot records into history table
-        if payload.items:
+        # Check which snapshots already exist for this schedule/date
+        cursor.execute(
+            """
+            SELECT EMPLOYEEGUID, JOBTITLE, FIELD_NAME
+            FROM GRATLYDB.PAYOUT_APPROVAL_HISTORY
+            WHERE PAYOUT_SCHEDULEID = %s
+              AND BUSINESSDATE = %s
+              AND CHANGE_TYPE = 'INITIAL_SNAPSHOT'
+            """,
+            (payload.payoutScheduleId, payload.businessDate),
+        )
+        existing_snapshots = cursor.fetchall()
+
+        # Build set of existing snapshot keys (normalize None to empty string)
+        existing_keys = set()
+        for row in existing_snapshots:
+            key = (
+                row["EMPLOYEEGUID"] or "",
+                row["JOBTITLE"] or "",
+                row["FIELD_NAME"] or "",
+            )
+            existing_keys.add(key)
+
+        logger.info(f"Found {len(existing_keys)} existing INITIAL_SNAPSHOT records for schedule {payload.payoutScheduleId}, date {payload.businessDate}")
+
+        # Filter out items that already have snapshots
+        new_items = []
+        for item in payload.items:
+            key = (
+                item.employeeGuid or "",
+                item.jobTitle or "",
+                item.fieldName or "",
+            )
+            if key not in existing_keys:
+                new_items.append(item)
+
+        logger.info(f"Inserting {len(new_items)} new INITIAL_SNAPSHOT records (skipping {len(payload.items) - len(new_items)} existing)")
+
+        # Insert only new snapshot records into history table
+        if new_items:
             rows = [
                 (
                     approval_id,
@@ -2074,7 +2113,7 @@ def save_approval_snapshot(payload: ApprovalSnapshotPayload):
                     payload.userId,
                     "INITIAL_SNAPSHOT",
                 )
-                for item in payload.items
+                for item in new_items
             ]
             cursor.executemany(
                 """
@@ -2099,7 +2138,7 @@ def save_approval_snapshot(payload: ApprovalSnapshotPayload):
             )
 
         conn.commit()
-        return {"success": True, "snapshot_count": len(payload.items)}
+        return {"success": True, "snapshot_count": len(new_items), "skipped_count": len(payload.items) - len(new_items)}
     except pymysql.MySQLError as err:
         conn.rollback()
         raise HTTPException(status_code=500, detail=f"Error saving approval snapshot: {err}")

@@ -133,11 +133,14 @@ export async function fetchApprovals(restaurantId: number): Promise<ApprovalsRes
   }
 }
 
-export async function saveApprovalOverrides(payload: ApprovalOverridePayload): Promise<void> {
+export async function saveApprovalOverrides(payload: ApprovalOverridePayload): Promise<{ success: boolean; error?: string }> {
   try {
-    await api.post("/approvals/overrides", payload);
+    const result = await api.post<{ success: boolean; approval_id: number }>("/approvals/overrides", payload);
+    console.log("Saved approval overrides:", result);
+    return { success: true };
   } catch (error) {
-    console.warn("Failed to save approval overrides:", error);
+    console.error("Failed to save approval overrides:", error);
+    return { success: false, error: String(error) };
   }
 }
 

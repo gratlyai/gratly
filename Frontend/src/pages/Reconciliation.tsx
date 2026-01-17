@@ -1924,6 +1924,17 @@ export default function Reconciliation() {
                                       }
                                     }
 
+                                    // Object to capture data for async save after state update
+                                    const saveData: {
+                                      payloadItems: ReturnType<typeof buildApprovalItems> | null;
+                                      scheduleId: number | null;
+                                      businessDate: string | null;
+                                    } = {
+                                      payloadItems: null,
+                                      scheduleId: null,
+                                      businessDate: null,
+                                    };
+
                                     setSchedules((current) =>
                                       current.map((scheduleItem) => {
                                         const itemKey = `${scheduleItem.payoutScheduleId}-${scheduleItem.businessDate}`;
@@ -2168,15 +2179,10 @@ export default function Reconciliation() {
                                         };
                                         // Calculate the final values with proper deductions
                                         const payloadItems = buildApprovalItems(normalizedSchedule);
-                                        if (normalizedSchedule.businessDate && userId !== null) {
-                                          saveApprovalOverrides({
-                                            restaurantId,
-                                            payoutScheduleId: normalizedSchedule.payoutScheduleId,
-                                            businessDate: normalizedSchedule.businessDate,
-                                            userId,
-                                            items: payloadItems,
-                                          });
-                                        }
+                                        // Store for async save after state update
+                                        saveData.payloadItems = payloadItems;
+                                        saveData.scheduleId = normalizedSchedule.payoutScheduleId;
+                                        saveData.businessDate = normalizedSchedule.businessDate;
                                         // Update contributors with recalculated values from buildApprovalItems
                                         const recalculatedContributors = payloadItems.map((item) => {
                                           // Find matching original contributor to preserve extra fields
@@ -2204,6 +2210,30 @@ export default function Reconciliation() {
                                         };
                                       }),
                                     );
+
+                                    // Perform the async save after state update
+                                    if (saveData.payloadItems && saveData.scheduleId && saveData.businessDate && userId !== null) {
+                                      console.log("Saving approval overrides:", {
+                                        restaurantId,
+                                        payoutScheduleId: saveData.scheduleId,
+                                        businessDate: saveData.businessDate,
+                                        itemCount: saveData.payloadItems.length,
+                                      });
+                                      const saveResult = await saveApprovalOverrides({
+                                        restaurantId,
+                                        payoutScheduleId: saveData.scheduleId,
+                                        businessDate: saveData.businessDate,
+                                        userId,
+                                        items: saveData.payloadItems,
+                                      });
+                                      if (!saveResult.success) {
+                                        console.error("Failed to save:", saveResult.error);
+                                        setValidationError(`Failed to save changes: ${saveResult.error}`);
+                                        return;
+                                      }
+                                      console.log("Save successful");
+                                    }
+
                                     setEditingScheduleKey(null);
                                     setResetToken((current) => current + 1);
                                     setPayoutEdits({});
