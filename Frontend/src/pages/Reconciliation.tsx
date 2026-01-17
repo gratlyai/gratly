@@ -1924,19 +1924,73 @@ export default function Reconciliation() {
                                       }
                                     }
 
-                                    // Object to capture data for async save after state update
-                                    const saveData: {
-                                      payloadItems: ReturnType<typeof buildApprovalItems> | null;
-                                      scheduleId: number | null;
-                                      businessDate: string | null;
-                                    } = {
-                                      payloadItems: null,
-                                      scheduleId: null,
-                                      businessDate: null,
+                                    // Find the current schedule and build payload BEFORE setSchedules (which is async)
+                                    const currentSchedule = schedules.find(
+                                      (s) => `${s.payoutScheduleId}-${s.businessDate}` === scheduleKey
+                                    );
+                                    if (!currentSchedule) {
+                                      console.error("Schedule not found:", scheduleKey);
+                                      return;
+                                    }
+
+                                    // Build the normalized schedule with all edits applied (same logic as inside setSchedules)
+                                    const { overallTips: baseOverallTips, overallGratuity: baseOverallGratuity } = getOverallBase(currentSchedule);
+                                    const preUpdatedContributors = currentSchedule.contributors.map((contributor) => {
+                                      const isContributor = contributor.isContributor !== "No";
+                                      const netKey = `${scheduleKey}-net-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`;
+                                      const payoutKey = `${scheduleKey}-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`;
+                                      const editedNet = netEdits[netKey];
+                                      const editedPct = payoutEdits[payoutKey];
+
+                                      if (editedNet !== undefined) {
+                                        const netValue = parseCurrency(editedNet) ?? 0;
+                                        const prepayout = contributor.prepayoutDeduction || 0;
+                                        const fee = contributor.payoutFee || 0;
+                                        const totalPool = baseOverallTips + baseOverallGratuity;
+
+                                        if (isContributor) {
+                                          const contributorTips = Number(contributor.totalTips || 0);
+                                          const contributorGratuity = Number(contributor.totalGratuity || 0);
+                                          const contributorTotal = contributorTips + contributorGratuity;
+                                          if (contributorTotal > 0) {
+                                            const payoutAmount = contributorTotal - netValue - prepayout - fee;
+                                            const newPercentage = roundCurrency((payoutAmount / contributorTotal) * 100);
+                                            return { ...contributor, payoutPercentage: newPercentage, netPayout: netValue };
+                                          }
+                                        } else {
+                                          if (totalPool > 0) {
+                                            const grossPayout = netValue + prepayout + fee;
+                                            const newPercentage = roundCurrency((grossPayout / totalPool) * 100);
+                                            return { ...contributor, payoutPercentage: newPercentage, netPayout: netValue };
+                                          }
+                                        }
+                                      }
+
+                                      if (!isContributor && editedPct !== undefined) {
+                                        const parsed = parsePercentage(editedPct);
+                                        if (parsed !== null) {
+                                          return { ...contributor, payoutPercentage: parsed };
+                                        }
+                                      }
+
+                                      return contributor;
+                                    });
+
+                                    const preNormalizedSchedule = {
+                                      ...currentSchedule,
+                                      contributors: preUpdatedContributors,
                                     };
 
-                                    console.log("DEBUG scheduleKey:", scheduleKey);
-                                    console.log("DEBUG current schedules count:", schedules.length);
+                                    // Build payload items SYNCHRONOUSLY before setSchedules
+                                    const savePayloadItems = buildApprovalItems(preNormalizedSchedule);
+                                    const saveScheduleId = currentSchedule.payoutScheduleId;
+                                    const saveBusinessDate = currentSchedule.businessDate;
+
+                                    console.log("DEBUG: Built payload synchronously:", {
+                                      itemCount: savePayloadItems.length,
+                                      scheduleId: saveScheduleId,
+                                      businessDate: saveBusinessDate,
+                                    });
                                     setSchedules((current) => {
                                       console.log("DEBUG inside setSchedules, current count:", current.length);
                                       return current.map((scheduleItem) => {
@@ -2183,10 +2237,6 @@ export default function Reconciliation() {
                                         };
                                         // Calculate the final values with proper deductions
                                         const payloadItems = buildApprovalItems(normalizedSchedule);
-                                        // Store for async save after state update
-                                        saveData.payloadItems = payloadItems;
-                                        saveData.scheduleId = normalizedSchedule.payoutScheduleId;
-                                        saveData.businessDate = normalizedSchedule.businessDate;
                                         // Update contributors with recalculated values from buildApprovalItems
                                         const recalculatedContributors = payloadItems.map((item) => {
                                           // Find matching original contributor to preserve extra fields
@@ -2215,28 +2265,20 @@ export default function Reconciliation() {
                                       });
                                     });
 
-                                    // Perform the async save after state update
-                                    console.log("DEBUG Save check:", {
-                                      hasPayloadItems: !!saveData.payloadItems,
-                                      payloadItemsCount: saveData.payloadItems?.length,
-                                      scheduleId: saveData.scheduleId,
-                                      businessDate: saveData.businessDate,
-                                      userId,
-                                      restaurantId,
-                                    });
-                                    if (saveData.payloadItems && saveData.scheduleId && saveData.businessDate && userId !== null) {
+                                    // Perform the save using synchronously built payload
+                                    if (savePayloadItems && saveScheduleId && saveBusinessDate && userId !== null) {
                                       console.log("Saving approval overrides:", {
                                         restaurantId,
-                                        payoutScheduleId: saveData.scheduleId,
-                                        businessDate: saveData.businessDate,
-                                        itemCount: saveData.payloadItems.length,
+                                        payoutScheduleId: saveScheduleId,
+                                        businessDate: saveBusinessDate,
+                                        itemCount: savePayloadItems.length,
                                       });
                                       const saveResult = await saveApprovalOverrides({
                                         restaurantId,
-                                        payoutScheduleId: saveData.scheduleId,
-                                        businessDate: saveData.businessDate,
+                                        payoutScheduleId: saveScheduleId,
+                                        businessDate: saveBusinessDate,
                                         userId,
-                                        items: saveData.payloadItems,
+                                        items: savePayloadItems,
                                       });
                                       if (!saveResult.success) {
                                         console.error("Failed to save:", saveResult.error);
@@ -2245,7 +2287,7 @@ export default function Reconciliation() {
                                       }
                                       console.log("Save successful");
                                     } else {
-                                      console.log("DEBUG Save skipped - condition not met");
+                                      console.log("Save skipped - missing required data");
                                     }
 
                                     setEditingScheduleKey(null);
