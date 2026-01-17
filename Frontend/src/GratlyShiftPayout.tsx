@@ -834,13 +834,13 @@ const GratlyFormsSystem: React.FC = () => {
                                 <h4 className="font-semibold text-gray-700 mb-3">Payout Triggers</h4>
                                 <div className="grid grid-cols-2 gap-4">
                                   <div className="text-sm">
-                                    <span className="font-medium text-gray-600">Gratuity:</span>{' '}
+                                    <span className="font-medium text-gray-600">Gratuity Contribution:</span>{' '}
                                     <span className="text-gray-900">
                                       {expandedScheduleDetails[schedule.payout_schedule_id].payout_triggers.gratuity ?? 'N/A'}%
                                     </span>
                                   </div>
                                   <div className="text-sm">
-                                    <span className="font-medium text-gray-600">Tips:</span>{' '}
+                                    <span className="font-medium text-gray-600">Tips Contribution:</span>{' '}
                                     <span className="text-gray-900">
                                       {expandedScheduleDetails[schedule.payout_schedule_id].payout_triggers.tips ?? 'N/A'}%
                                     </span>
@@ -849,15 +849,15 @@ const GratlyFormsSystem: React.FC = () => {
                               </div>
                             )}
 
-                            {/* Contributors Section */}
+                            {/* Contributor(s) Section */}
                             {expandedScheduleDetails[schedule.payout_schedule_id]?.payout_receivers?.some(
-                              (r: any) => r.contributor_receiver === 1
+                              (r: any) => r.contributor_receiver === 0
                             ) && (
                               <div className="border-b border-gray-100 pb-4">
-                                <h4 className="font-semibold text-gray-700 mb-3">Contributors</h4>
+                                <h4 className="font-semibold text-gray-700 mb-3">Contributor(s)</h4>
                                 <div className="flex flex-wrap gap-2">
                                   {expandedScheduleDetails[schedule.payout_schedule_id].payout_receivers
-                                    .filter((r: any) => r.contributor_receiver === 1)
+                                    .filter((r: any) => r.contributor_receiver === 0)
                                     .map((receiver: any, idx: number) => (
                                       <span
                                         key={idx}
@@ -870,15 +870,15 @@ const GratlyFormsSystem: React.FC = () => {
                               </div>
                             )}
 
-                            {/* Receivers & Percentages Section */}
+                            {/* Receiver(s) Section */}
                             {expandedScheduleDetails[schedule.payout_schedule_id]?.payout_receivers?.some(
-                              (r: any) => r.contributor_receiver === 0
+                              (r: any) => r.contributor_receiver === 1
                             ) && (
                               <div className="border-b border-gray-100 pb-4">
-                                <h4 className="font-semibold text-gray-700 mb-3">Receivers & Percentages</h4>
+                                <h4 className="font-semibold text-gray-700 mb-3">Receiver(s)</h4>
                                 <div className="space-y-2">
                                   {expandedScheduleDetails[schedule.payout_schedule_id].payout_receivers
-                                    .filter((r: any) => r.contributor_receiver === 0)
+                                    .filter((r: any) => r.contributor_receiver === 1)
                                     .map((receiver: any, idx: number) => (
                                       <div key={idx} className="flex justify-between text-sm">
                                         <span className="text-gray-700">{receiver.payout_receiver_id}</span>
@@ -902,7 +902,7 @@ const GratlyFormsSystem: React.FC = () => {
                                         <div key={idx} className="flex justify-between text-sm">
                                           <span className="text-gray-700">{prePayout.user_account || 'Unknown'}</span>
                                           <span className="font-semibold text-gray-900">
-                                            {prePayout.pre_payout_option === 0
+                                            {prePayout.pre_payout_option === 1
                                               ? `$${prePayout.pre_payout_value}`
                                               : `${prePayout.pre_payout_value}%`}
                                           </span>
