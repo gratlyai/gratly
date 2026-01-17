@@ -96,6 +96,8 @@ export default function Reconciliation() {
   const [addMemberDropdowns, setAddMemberDropdowns] = useState<Record<string, Record<string, boolean>>>({});
   const [addMemberSlots, setAddMemberSlots] = useState<Record<string, string[]>>({});
   const [payoutEdits, setPayoutEdits] = useState<Record<string, string>>({});
+  const [netEdits, setNetEdits] = useState<Record<string, string>>({});
+  const [validationError, setValidationError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [approvedScheduleKeys, setApprovedScheduleKeys] = useState<Set<string>>(new Set());
   const [jobTitles, setJobTitles] = useState<string[]>([]);
@@ -200,6 +202,12 @@ export default function Reconciliation() {
   };
 
   const roundCurrency = (value: number) => Math.round(value * 100) / 100;
+
+  const parseCurrency = (value: string) => {
+    const cleaned = value.replace(/[^0-9.-]/g, "");
+    const parsed = Number(cleaned);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
 
   const isManualReceiver = (receiver: ApprovalContributor) =>
     (receiver.isContributor || "").toLowerCase() === "no" &&
@@ -567,6 +575,31 @@ export default function Reconciliation() {
 
   return (
     <main className="px-6 py-6">
+      {/* Validation Error Dialog */}
+      {validationError && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="mx-4 max-w-md rounded-lg bg-white p-6 shadow-xl">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-red-100">
+                <svg className="h-6 w-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <h3 className="text-lg font-semibold text-gray-900">Validation Error</h3>
+            </div>
+            <p className="mb-6 text-sm text-gray-600">{validationError}</p>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setValidationError(null)}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-md transition hover:bg-red-700"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">Approvals</h1>
@@ -1167,6 +1200,30 @@ export default function Reconciliation() {
                                         </div>
                                       </div>
                                     )}
+                                    {/* Net Amount Edit (in Edit mode) */}
+                                    {editingScheduleKey === scheduleKey && (
+                                      <div className="sm:col-span-2">
+                                        <label className="text-xs font-medium uppercase text-gray-500">
+                                          Edit Net Amount
+                                          <input
+                                            key={`${scheduleKey}-net-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}-${resetToken}`}
+                                            value={
+                                              netEdits[
+                                                `${scheduleKey}-net-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`
+                                              ] ?? `$${(contributor.netPayout ?? netPayoutDisplay).toFixed(2)}`
+                                            }
+                                            onChange={(event) => {
+                                              const key = `${scheduleKey}-net-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`;
+                                              setNetEdits((current) => ({
+                                                ...current,
+                                                [key]: event.target.value,
+                                              }));
+                                            }}
+                                            className="mt-1 block w-full max-w-[140px] rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
+                                          />
+                                        </label>
+                                      </div>
+                                    )}
                                   </div>
                                   <p className="mt-3 text-xs text-gray-400">ID: {contributor.employeeGuid}</p>
                                 </div>
@@ -1376,6 +1433,30 @@ export default function Reconciliation() {
                                                           onChange={(event) => {
                                                             const key = `${scheduleKey}-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`;
                                                             setPayoutEdits((current) => ({
+                                                              ...current,
+                                                              [key]: event.target.value,
+                                                            }));
+                                                          }}
+                                                          className="mt-1 block w-full max-w-[140px] rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
+                                                        />
+                                                      </label>
+                                                    </div>
+                                                  )}
+                                                  {/* Net Amount Edit (in Edit mode) */}
+                                                  {editingScheduleKey === scheduleKey && (
+                                                    <div className="sm:col-span-2">
+                                                      <label className="text-xs font-medium uppercase text-gray-500">
+                                                        Edit Net Amount
+                                                        <input
+                                                          key={`${scheduleKey}-net-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}-${resetToken}`}
+                                                          value={
+                                                            netEdits[
+                                                              `${scheduleKey}-net-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`
+                                                            ] ?? `$${(contributor.netPayout ?? netPayoutDisplay).toFixed(2)}`
+                                                          }
+                                                          onChange={(event) => {
+                                                            const key = `${scheduleKey}-net-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`;
+                                                            setNetEdits((current) => ({
                                                               ...current,
                                                               [key]: event.target.value,
                                                             }));
@@ -1798,6 +1879,50 @@ export default function Reconciliation() {
                                     if (restaurantId === null) {
                                       return;
                                     }
+
+                                    // Check if any net edits were made for this schedule
+                                    const scheduleNetEdits = Object.entries(netEdits).filter(([key]) =>
+                                      key.startsWith(`${scheduleKey}-net-`)
+                                    );
+
+                                    // If net edits exist, validate totals first
+                                    if (scheduleNetEdits.length > 0) {
+                                      const scheduleToValidate = schedules.find(
+                                        (s) => `${s.payoutScheduleId}-${s.businessDate}` === scheduleKey
+                                      );
+                                      if (scheduleToValidate) {
+                                        const { overallTips, overallGratuity } = getOverallBase(scheduleToValidate);
+                                        const totalTipsGratuity = overallTips + overallGratuity;
+
+                                        // Calculate total Net (using edited values where available)
+                                        let totalNet = 0;
+                                        let totalPrepayout = 0;
+                                        let totalFee = 0;
+
+                                        for (const contributor of scheduleToValidate.contributors) {
+                                          const netKey = `${scheduleKey}-net-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`;
+                                          const editedNet = netEdits[netKey];
+                                          const netValue = editedNet !== undefined
+                                            ? (parseCurrency(editedNet) ?? 0)
+                                            : (contributor.netPayout ?? 0);
+                                          totalNet += netValue;
+                                          totalPrepayout += contributor.prepayoutDeduction || 0;
+                                          totalFee += contributor.payoutFee || 0;
+                                        }
+
+                                        const expectedTotal = roundCurrency(totalNet + totalPrepayout + totalFee);
+                                        const actualTotal = roundCurrency(totalTipsGratuity);
+
+                                        // Allow small rounding differences (within $0.05)
+                                        if (Math.abs(expectedTotal - actualTotal) > 0.05) {
+                                          setValidationError(
+                                            `Total mismatch: Sum of Net amounts ($${totalNet.toFixed(2)}) + Prepayout ($${totalPrepayout.toFixed(2)}) + Transfer Fee ($${totalFee.toFixed(2)}) = $${expectedTotal.toFixed(2)}, but Total Tips + Gratuity = $${actualTotal.toFixed(2)}. Please adjust the values to match.`
+                                          );
+                                          return;
+                                        }
+                                      }
+                                    }
+
                                     setSchedules((current) =>
                                       current.map((scheduleItem) => {
                                         const itemKey = `${scheduleItem.payoutScheduleId}-${scheduleItem.businessDate}`;
@@ -1806,25 +1931,77 @@ export default function Reconciliation() {
                                         }
                                         const { overallTips, overallGratuity } = getOverallBase(scheduleItem);
                                         const updatedContributors = scheduleItem.contributors.map((contributor) => {
-                                          if (contributor.isContributor !== "No") {
-                                            return contributor;
-                                          }
+                                          const isContributor = contributor.isContributor !== "No";
+                                          const netKey = `${scheduleKey}-net-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`;
                                           const payoutKey = `${scheduleKey}-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`;
-                                          const editedValue = payoutEdits[payoutKey];
-                                          const parsed = editedValue ? parsePercentage(editedValue) : null;
-                                          if (parsed === null) {
-                                            return contributor;
+                                          const editedNet = netEdits[netKey];
+                                          const editedPct = payoutEdits[payoutKey];
+
+                                          // Check if net was edited - back-calculate percentage
+                                          if (editedNet !== undefined) {
+                                            const netValue = parseCurrency(editedNet) ?? 0;
+                                            const prepayout = contributor.prepayoutDeduction || 0;
+                                            const fee = contributor.payoutFee || 0;
+                                            const totalPool = overallTips + overallGratuity;
+
+                                            if (isContributor) {
+                                              // For contributors: percentage = 100 * (Tips + Gratuity - Net - Prepayout - Fee) / (Tips + Gratuity)
+                                              const contributorTips = Number(contributor.totalTips || 0);
+                                              const contributorGratuity = Number(contributor.totalGratuity || 0);
+                                              const contributorTotal = contributorTips + contributorGratuity;
+                                              if (contributorTotal > 0) {
+                                                const payoutAmount = contributorTotal - netValue - prepayout - fee;
+                                                const newPercentage = roundCurrency((payoutAmount / contributorTotal) * 100);
+                                                const payoutTips = roundCurrency(-(newPercentage / 100) * contributorTips);
+                                                const payoutGratuity = roundCurrency(-(newPercentage / 100) * contributorGratuity);
+                                                return {
+                                                  ...contributor,
+                                                  payoutPercentage: newPercentage,
+                                                  payoutTips,
+                                                  payoutGratuity,
+                                                  netPayout: netValue,
+                                                  overallTips,
+                                                  overallGratuity,
+                                                };
+                                              }
+                                            } else {
+                                              // For receivers: percentage = 100 * (Net + Prepayout + Fee) / (overallTips + overallGratuity)
+                                              if (totalPool > 0) {
+                                                const grossPayout = netValue + prepayout + fee;
+                                                const newPercentage = roundCurrency((grossPayout / totalPool) * 100);
+                                                const payoutTips = roundCurrency((newPercentage / 100) * overallTips);
+                                                const payoutGratuity = roundCurrency((newPercentage / 100) * overallGratuity);
+                                                return {
+                                                  ...contributor,
+                                                  payoutPercentage: newPercentage,
+                                                  payoutTips,
+                                                  payoutGratuity,
+                                                  netPayout: netValue,
+                                                  overallTips,
+                                                  overallGratuity,
+                                                };
+                                              }
+                                            }
                                           }
-                                          const payoutTips = roundCurrency((parsed / 100) * overallTips);
-                                          const payoutGratuity = roundCurrency((parsed / 100) * overallGratuity);
-                                          return {
-                                            ...contributor,
-                                            payoutPercentage: parsed,
-                                            payoutTips,
-                                            payoutGratuity,
-                                            overallTips,
-                                            overallGratuity,
-                                          };
+
+                                          // Handle percentage edit for receivers (existing logic)
+                                          if (!isContributor && editedPct !== undefined) {
+                                            const parsed = parsePercentage(editedPct);
+                                            if (parsed !== null) {
+                                              const payoutTips = roundCurrency((parsed / 100) * overallTips);
+                                              const payoutGratuity = roundCurrency((parsed / 100) * overallGratuity);
+                                              return {
+                                                ...contributor,
+                                                payoutPercentage: parsed,
+                                                payoutTips,
+                                                payoutGratuity,
+                                                overallTips,
+                                                overallGratuity,
+                                              };
+                                            }
+                                          }
+
+                                          return contributor;
                                         });
                                         const existingKeys = new Set(
                                           updatedContributors.map(
@@ -2021,6 +2198,7 @@ export default function Reconciliation() {
                                     setEditingScheduleKey(null);
                                     setResetToken((current) => current + 1);
                                     setPayoutEdits({});
+                                    setNetEdits({});
                                     setAddMemberSelections({});
                                     setAddMemberDropdowns({});
                                     setAddMemberSlots({});
@@ -2043,6 +2221,7 @@ export default function Reconciliation() {
                                     setExpandedEmployees({});
                                     setResetToken((current) => current + 1);
                                     setPayoutEdits({});
+                                    setNetEdits({});
                                     setAddMemberSelections({});
                                     setAddMemberDropdowns({});
                                     setAddMemberSlots({});
