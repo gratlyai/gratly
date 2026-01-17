@@ -11,6 +11,7 @@ interface PayoutScheduleRow {
   start_time: string | null;
   end_time: string | null;
   payout_rule_id: string | null;
+  is_active: boolean;
 }
 
 interface PayoutScheduleDetail {
@@ -34,6 +35,7 @@ interface PayoutScheduleDetail {
     pre_payout_value: number | null;
     user_account: string | null;
   }>;
+  is_active?: boolean;
 }
 
 interface Fund {
@@ -64,6 +66,8 @@ const GratlyFormsSystem: React.FC = () => {
   const [restaurantKey, setRestaurantKey] = useState<string>('');
   const [expandedScheduleDetails, setExpandedScheduleDetails] = useState<Record<number, any>>({});
   const [loadingExpandedScheduleDetails, setLoadingExpandedScheduleDetails] = useState<Record<number, boolean>>({});
+  const [showInactiveSchedules, setShowInactiveSchedules] = useState<boolean>(false);
+  const [isActivatingSchedule, setIsActivatingSchedule] = useState<boolean>(false);
   // Form creation states
   const [formName, setFormName] = useState<string>('');
   const [startDate, setStartDate] = useState<string>('');
@@ -276,7 +280,7 @@ const GratlyFormsSystem: React.FC = () => {
     });
   }, [payoutContributors, payoutReceivers]);
 
-  const fetchSchedules = useCallback(async () => {
+  const fetchSchedules = useCallback(async (includeInactive?: boolean) => {
     if (userId === null) {
       return;
     }
@@ -287,6 +291,9 @@ const GratlyFormsSystem: React.FC = () => {
       const numericRestaurantId = Number(restaurantKey);
       if (Number.isFinite(numericRestaurantId)) {
         params.set('restaurant_id', String(numericRestaurantId));
+      }
+      if (includeInactive === true) {
+        params.set('include_inactive', 'true');
       }
       const res = await fetch(`${API_BASE_URL}/payout-schedules?${params.toString()}`);
       if (!res.ok) {
@@ -300,13 +307,13 @@ const GratlyFormsSystem: React.FC = () => {
     } finally {
       setIsLoadingSchedules(false);
     }
-  }, [userId]);
+  }, [userId, restaurantKey]);
 
   useEffect(() => {
     if (activeView === 'existing') {
-      fetchSchedules();
+      fetchSchedules(showInactiveSchedules);
     }
-  }, [activeView, fetchSchedules]);
+  }, [activeView, fetchSchedules, showInactiveSchedules]);
 
   const formatDayRange = (start: string | null, end: string | null) => {
     if (!start && !end) return '—';
@@ -505,16 +512,49 @@ const GratlyFormsSystem: React.FC = () => {
         }
         throw new Error(message);
       }
-      setDeleteScheduleSuccess('Schedule deleted.');
+      setDeleteScheduleSuccess('Schedule archived.');
       setSelectedScheduleId(null);
       setExpandedScheduleId(null);
-      await fetchSchedules();
+      await fetchSchedules(showInactiveSchedules);
       window.setTimeout(() => setDeleteScheduleSuccess(''), 3000);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to delete schedule';
       setDeleteScheduleError(message);
     } finally {
       setIsDeletingSchedule(false);
+    }
+  };
+
+  const handleActivateSchedule = async (scheduleId: number) => {
+    if (userId === null) {
+      return;
+    }
+    setIsActivatingSchedule(true);
+    setDeleteScheduleError('');
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/payout-schedules/${scheduleId}/activate?user_id=${userId}`,
+        { method: 'POST' }
+      );
+      if (!res.ok) {
+        let message = `Failed to activate schedule (${res.status})`;
+        try {
+          const data = await res.json();
+          message = data.detail || message;
+        } catch {
+          // Ignore JSON parsing errors.
+        }
+        throw new Error(message);
+      }
+      setDeleteScheduleSuccess('Schedule activated.');
+      setExpandedScheduleId(null);
+      await fetchSchedules(showInactiveSchedules);
+      window.setTimeout(() => setDeleteScheduleSuccess(''), 3000);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to activate schedule';
+      setDeleteScheduleError(message);
+    } finally {
+      setIsActivatingSchedule(false);
     }
   };
 
@@ -683,9 +723,9 @@ const GratlyFormsSystem: React.FC = () => {
       {isDeleteConfirmOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
           <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
-            <h2 className="text-lg font-semibold text-gray-900">Delete schedule?</h2>
+            <h2 className="text-lg font-semibold text-gray-900">Archive schedule?</h2>
             <p className="mt-2 text-sm text-gray-600">
-              This action cannot be undone. Are you sure you want to delete this payout schedule?
+              This action cannot be undone. Are you sure you want to archive this payout schedule?
             </p>
             <div className="mt-6 flex items-center justify-end gap-3">
               <button
@@ -703,7 +743,7 @@ const GratlyFormsSystem: React.FC = () => {
                 }}
                 className="px-4 py-2 rounded-lg bg-[#cab99a] text-black font-semibold hover:bg-[#bfa986]"
               >
-                Yes, delete
+                Yes, archive
               </button>
             </div>
           </div>
@@ -717,6 +757,15 @@ const GratlyFormsSystem: React.FC = () => {
               <p className="text-sm text-gray-500">Create and manage shift payout schedules for your team.</p>
             </div>
             <div className="flex items-center gap-3">
+              <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={showInactiveSchedules}
+                  onChange={(e) => setShowInactiveSchedules(e.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-900"
+                />
+                Show Archived Schedules
+              </label>
               <button
                 type="button"
                 onClick={() => {
@@ -737,7 +786,7 @@ const GratlyFormsSystem: React.FC = () => {
                     : 'bg-gray-200 text-gray-500 cursor-not-allowed'
                 }`}
               >
-                {isDeletingSchedule ? 'Deleting...' : 'Delete'}
+                {isDeletingSchedule ? 'Archiving...' : 'Archive'}
               </button>
             </div>
           </div>
@@ -795,27 +844,33 @@ const GratlyFormsSystem: React.FC = () => {
                       />
                       <div className="grid w-full gap-4 sm:grid-cols-2 lg:grid-cols-5">
                         <div>
-                          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Name</p>
+                          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Name</p>
                           <p className="text-sm font-semibold text-gray-900">{schedule.name}</p>
                         </div>
                         <div>
-                          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Status</p>
-                          <p className="text-sm text-gray-700">
-                            {schedule.start_day || schedule.start_time ? 'Scheduled' : 'Draft'}
-                          </p>
+                          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Status</p>
+                          {schedule.is_active ? (
+                            <span className="inline-block px-3 py-1 bg-green-100 text-green-700 text-sm font-semibold rounded-full">
+                              Active
+                            </span>
+                          ) : (
+                            <span className="inline-block px-3 py-1 bg-red-100 text-red-700 text-sm font-semibold rounded-full">
+                              Inactive
+                            </span>
+                          )}
                         </div>
                         <div>
-                          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Payout Rule</p>
+                          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Payout Rule</p>
                           <p className="text-sm text-gray-700">{payoutRuleLabel(schedule.payout_rule_id)}</p>
                         </div>
                         <div>
-                          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Day</p>
+                          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Day</p>
                           <p className="text-sm text-gray-700">
                             {formatDayRange(schedule.start_day, schedule.end_day)}
                           </p>
                         </div>
                         <div>
-                          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Time</p>
+                          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Time</p>
                           <p className="text-sm text-gray-700">
                             {formatTimeRange(schedule.start_time, schedule.end_time)}
                           </p>
@@ -852,47 +907,67 @@ const GratlyFormsSystem: React.FC = () => {
                               </div>
                             )}
 
-                            {/* Contributor(s) Section */}
-                            {expandedScheduleDetails[schedule.payout_schedule_id]?.payout_receivers?.some(
-                              (r: any) => r.contributor_receiver === 0
-                            ) && (
-                              <div className="border-b border-gray-100 pb-4">
-                                <h4 className="font-semibold text-gray-700 mb-3">Contributor(s)</h4>
-                                <div className="flex flex-wrap gap-2">
-                                  {expandedScheduleDetails[schedule.payout_schedule_id].payout_receivers
-                                    .filter((r: any) => r.contributor_receiver === 0)
-                                    .map((receiver: any, idx: number) => (
-                                      <span
-                                        key={idx}
-                                        className="px-3 py-1 bg-gray-100 rounded-full text-sm text-gray-700 font-medium"
-                                      >
-                                        {receiver.payout_receiver_id}
-                                      </span>
-                                    ))}
-                                </div>
-                              </div>
-                            )}
+                            {(() => {
+                              const contributors = expandedScheduleDetails[schedule.payout_schedule_id]?.payout_receivers?.filter(
+                                (r: any) => r.contributor_receiver === 0
+                              ) || [];
+                              const contributorNames = new Set(contributors.map((c: any) => c.payout_receiver_id));
+                              const receivers = expandedScheduleDetails[schedule.payout_schedule_id]?.payout_receivers?.filter(
+                                (r: any) => r.contributor_receiver === 1 && !contributorNames.has(r.payout_receiver_id)
+                              ) || [];
 
-                            {/* Receiver(s) Section */}
-                            {expandedScheduleDetails[schedule.payout_schedule_id]?.payout_receivers?.some(
-                              (r: any) => r.contributor_receiver === 1
-                            ) && (
-                              <div className="border-b border-gray-100 pb-4">
-                                <h4 className="font-semibold text-gray-700 mb-3">Receiver(s)</h4>
-                                <div className="space-y-2">
-                                  {expandedScheduleDetails[schedule.payout_schedule_id].payout_receivers
-                                    .filter((r: any) => r.contributor_receiver === 1)
-                                    .map((receiver: any, idx: number) => (
-                                      <div key={idx} className="flex justify-between text-sm">
-                                        <span className="text-gray-700">{receiver.payout_receiver_id}</span>
-                                        <span className="font-semibold text-gray-900">
-                                          {receiver.payout_percentage !== null ? `${receiver.payout_percentage}%` : 'N/A'}
-                                        </span>
+                              // Calculate total receiver percentage
+                              const receiverTotal = receivers.reduce((sum: number, r: any) => {
+                                return sum + (r.payout_percentage !== null ? r.payout_percentage : 0);
+                              }, 0);
+
+                              // Calculate contributor percentage (100 - receiver total)
+                              const contributorPercentage = 100 - receiverTotal;
+
+                              return (
+                                <>
+                                  {/* Contributor(s) Section */}
+                                  {contributors.length > 0 && (
+                                    <div className="border-b border-gray-100 pb-4">
+                                      <div className="flex items-center justify-between mb-3">
+                                        <h4 className="font-semibold text-gray-700">Contributor(s)</h4>
+                                        <span className="font-semibold text-gray-900">{contributorPercentage}%</span>
                                       </div>
-                                    ))}
-                                </div>
-                              </div>
-                            )}
+                                      <div className="flex flex-wrap gap-2">
+                                        {contributors.map((contributor: any, idx: number) => (
+                                          <span
+                                            key={idx}
+                                            className="px-3 py-1 bg-gray-100 rounded-full text-sm text-gray-700 font-medium"
+                                          >
+                                            {contributor.payout_receiver_id}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* Receiver(s) Section */}
+                                  {receivers.length > 0 && (
+                                    <div className="border-b border-gray-100 pb-4">
+                                      <div className="flex items-center justify-between mb-3">
+                                        <h4 className="font-semibold text-gray-700">Receiver(s)</h4>
+                                        <span className="font-semibold text-gray-900">{receiverTotal}%</span>
+                                      </div>
+                                      <div className="space-y-2">
+                                        {receivers.map((receiver: any, idx: number) => (
+                                          <div key={idx} className="flex justify-between text-sm">
+                                            <span className="text-gray-700">{receiver.payout_receiver_id}</span>
+                                            <span className="font-semibold text-gray-900">
+                                              {receiver.payout_percentage !== null ? `${receiver.payout_percentage}%` : 'N/A'}
+                                            </span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </>
+                              );
+                            })()}
 
                             {/* Pre-Payout Entries Section */}
                             {expandedScheduleDetails[schedule.payout_schedule_id]?.pre_payouts &&
@@ -916,15 +991,26 @@ const GratlyFormsSystem: React.FC = () => {
                                 </div>
                               )}
 
-                            {/* Edit Schedule Button */}
+                            {/* Action Button - Edit or Activate */}
                             <div className="flex justify-end pt-4">
-                              <button
-                                type="button"
-                                onClick={() => loadScheduleDetails(schedule.payout_schedule_id)}
-                                className="bg-[#cab99a] text-black px-6 py-2 rounded-lg text-sm font-semibold hover:bg-[#bfa986] transition-all"
-                              >
-                                Edit Schedule
-                              </button>
+                              {schedule.is_active ? (
+                                <button
+                                  type="button"
+                                  onClick={() => loadScheduleDetails(schedule.payout_schedule_id)}
+                                  className="bg-[#cab99a] text-black px-6 py-2 rounded-lg text-sm font-semibold hover:bg-[#bfa986] transition-all"
+                                >
+                                  Edit Schedule
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleActivateSchedule(schedule.payout_schedule_id)}
+                                  disabled={isActivatingSchedule}
+                                  className="bg-[#cab99a] text-black px-6 py-2 rounded-lg text-sm font-semibold hover:bg-[#bfa986] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                  {isActivatingSchedule ? 'Activating...' : 'Activate this Payout'}
+                                </button>
+                              )}
                             </div>
                           </>
                         ) : (
