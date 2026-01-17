@@ -21,6 +21,9 @@ export type ApprovalContributor = {
   payoutGratuity: number;
   netPayout?: number;
   orderCount?: number;
+  prepayoutDeduction?: number;
+  payoutFee?: number;
+  contributionPool?: number;
 };
 
 export type ApprovalScheduleWithContributors = {
@@ -36,6 +39,8 @@ export type ApprovalScheduleWithContributors = {
   startDateTime: string | null;
   endDateTime: string | null;
   prepayoutFlag: boolean;
+  payoutTriggerTips?: number;
+  payoutTriggerGratuity?: number;
   totalSales: number;
   netSales: number;
   totalTips: number;
@@ -72,6 +77,8 @@ export type ApprovalOverrideItemPayload = {
   payoutTips: number;
   payoutGratuity: number;
   netPayout: number;
+  prepayoutDeduction?: number;
+  payoutFee?: number;
 };
 
 export type ApprovalOverridePayload = {
@@ -93,6 +100,27 @@ export type ApprovalFinalizeResponse = {
   approval_id?: number;
   is_approved?: boolean;
   already_approved?: boolean;
+};
+
+export type ApprovalSnapshotItem = {
+  employeeGuid: string | null;
+  employeeName: string | null;
+  jobTitle: string | null;
+  fieldName: string;
+  currentValue: string | null;
+};
+
+export type ApprovalSnapshotPayload = {
+  restaurantId: number;
+  payoutScheduleId: number;
+  businessDate: string;
+  userId: number;
+  items: ApprovalSnapshotItem[];
+};
+
+export type ApprovalSnapshotResponse = {
+  success: boolean;
+  snapshot_count?: number;
 };
 
 export async function fetchApprovals(restaurantId: number): Promise<ApprovalsResponse> {
@@ -119,6 +147,17 @@ export async function approvePayoutSchedule(
     return await api.post<ApprovalFinalizeResponse>("/approvals/approve", payload);
   } catch (error) {
     console.warn("Failed to approve payout schedule:", error);
+    return null;
+  }
+}
+
+export async function saveApprovalSnapshot(
+  payload: ApprovalSnapshotPayload,
+): Promise<ApprovalSnapshotResponse | null> {
+  try {
+    return await api.post<ApprovalSnapshotResponse>("/approvals/snapshot", payload);
+  } catch (error) {
+    console.warn("Failed to save approval snapshot:", error);
     return null;
   }
 }

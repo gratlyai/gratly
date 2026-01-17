@@ -3,9 +3,11 @@ import {
   approvePayoutSchedule,
   fetchApprovals,
   saveApprovalOverrides,
+  saveApprovalSnapshot,
   type ApprovalContributor,
   type ApprovalsResponse,
   type ApprovalScheduleWithContributors,
+  type ApprovalSnapshotItem,
 } from "../api/approvals";
 import { fetchActiveEmployeesByJobTitle, type EmployeeWithJob } from "../api/employees";
 import { fetchJobTitles } from "../api/jobs";
@@ -23,7 +25,20 @@ const formatValue = (value: string | null | undefined) => (value ? value : "N/A"
 const formatCurrency = (value: number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
 
-const formatPayoutAmount = (amount: number) => formatCurrency(amount);
+const formatAmountWithSign = (amount: number): { text: string; className: string } => {
+  if (amount < 0) {
+    // Negative: Red color, enclosed in parentheses
+    return {
+      text: `(${formatCurrency(Math.abs(amount))})`,
+      className: "text-red-600",
+    };
+  }
+  // Positive or zero: Green color, no sign
+  return {
+    text: formatCurrency(amount),
+    className: amount > 0 ? "text-green-600" : "text-gray-500",
+  };
+};
 
 const getNetPayout = (_isContributor: string, tips: number, gratuity: number, payoutAmount: number) => {
   const gross = tips + gratuity;
@@ -255,61 +270,165 @@ export default function Reconciliation() {
       acc[roleKey] = Number(role.payoutPercentage || 0);
       return acc;
     }, {} as Record<string, number>);
+    // Count non-manual receivers per role
     const receiverRoleCounts = receivers.reduce((acc, receiver) => {
-      if (isManualReceiver(receiver)) {
+      // A receiver is "manual" if they have payoutPercentage > 0 but no tips/gratuity and no in/out time
+      const isManual =
+        Number(receiver.payoutPercentage || 0) > 0 &&
+        Number(receiver.totalTips || 0) === 0 &&
+        Number(receiver.totalGratuity || 0) === 0 &&
+        receiver.inTime === null &&
+        receiver.outTime === null;
+      if (isManual) {
         return acc;
       }
       const roleKey = normalizeRoleKey(receiver.jobTitle ?? receiver.payoutReceiverId);
       acc[roleKey] = (acc[roleKey] ?? 0) + 1;
       return acc;
     }, {} as Record<string, number>);
-    const totalReceiverPercentage = getReceiverPercentSum(schedule);
+
     const { overallTips, overallGratuity } = getOverallBase(schedule);
 
-    return schedule.contributors.map((item) => {
+    // Calculate each receiver's effective percentage
+    const receiverPercentages: { receiver: ApprovalContributor; percentage: number }[] = [];
+    for (const receiver of receivers) {
+      const isManual =
+        Number(receiver.payoutPercentage || 0) > 0 &&
+        Number(receiver.totalTips || 0) === 0 &&
+        Number(receiver.totalGratuity || 0) === 0 &&
+        receiver.inTime === null &&
+        receiver.outTime === null;
+      const hasHours = isManual || (receiver.hoursWorked ?? 0) > 0;
+      if (!hasHours) {
+        continue;
+      }
+      const roleKey = normalizeRoleKey(receiver.jobTitle ?? receiver.payoutReceiverId);
+      const roleTotal = receiverRolePercentages[roleKey] ?? 0;
+      const roleCount = receiverRoleCounts[roleKey] ?? 0;
+      const sharePercentage = roleCount > 0 ? roleTotal / roleCount : 0;
+      const receiverPct = isManual ? Number(receiver.payoutPercentage || 0) : sharePercentage;
+      const payoutAmount = (receiverPct / 100) * (overallTips + overallGratuity);
+      if (payoutAmount > 0) {
+        receiverPercentages.push({ receiver, percentage: receiverPct });
+      }
+    }
+
+    // Sum up total receiver percentage (this is what contributors give)
+    const totalReceiverPercentage = receiverPercentages.reduce((sum, r) => sum + r.percentage, 0);
+
+    // Get the original total prepayout from the schedule
+    // We need to find the original prepayout total - sum from existing employees OR from schedule metadata
+    const existingPrepayoutTotal = schedule.contributors.reduce(
+      (sum, c) => sum + (c.prepayoutDeduction || 0),
+      0
+    );
+    // If no existing prepayout data, check if there's a contributionPool we can derive from
+    const originalFeePerPerson = schedule.contributors.find((c) => (c.payoutFee || 0) > 0)?.payoutFee || 0;
+
+    // First pass: calculate payout amounts and determine which employees have earnings
+    const employeePayouts = schedule.contributors.map((item) => {
       const isContributor = (item.isContributor || "").toLowerCase() === "yes";
+      const isManual =
+        !isContributor &&
+        Number(item.payoutPercentage || 0) > 0 &&
+        Number(item.totalTips || 0) === 0 &&
+        Number(item.totalGratuity || 0) === 0 &&
+        item.inTime === null &&
+        item.outTime === null;
+      const hasHours = isManual || (item.hoursWorked ?? 0) > 0;
+
       const receiverRoleKey = normalizeRoleKey(item.jobTitle ?? item.payoutReceiverId);
       const receiverRoleCount = receiverRoleCounts[receiverRoleKey] ?? 0;
       const rolePercentageTotal = receiverRolePercentages[receiverRoleKey] ?? 0;
       const receiverSharePercentage =
-        !isContributor && receiverRoleCount > 0
-          ? rolePercentageTotal / receiverRoleCount
-          : 0;
-      const receiverPayoutPercentage = isManualReceiver(item)
+        !isContributor && receiverRoleCount > 0 ? rolePercentageTotal / receiverRoleCount : 0;
+      const receiverPayoutPercentage = isManual
         ? Number(item.payoutPercentage || 0)
         : receiverSharePercentage;
+
       const tipTotal = Number(item.totalTips || 0) + Number(item.totalGratuity || 0);
-      const payoutTips =
-        isContributor && tipTotal > 0
+      const payoutTips = isContributor
+        ? tipTotal > 0
           ? roundCurrency(-(totalReceiverPercentage / 100) * Number(item.totalTips || 0))
-          : roundCurrency((receiverPayoutPercentage / 100) * overallTips);
-      const payoutGratuity =
-        isContributor && tipTotal > 0
+          : 0
+        : hasHours
+          ? roundCurrency((receiverPayoutPercentage / 100) * overallTips)
+          : 0;
+      const payoutGratuity = isContributor
+        ? tipTotal > 0
           ? roundCurrency(-(totalReceiverPercentage / 100) * Number(item.totalGratuity || 0))
-          : roundCurrency((receiverPayoutPercentage / 100) * overallGratuity);
+          : 0
+        : hasHours
+          ? roundCurrency((receiverPayoutPercentage / 100) * overallGratuity)
+          : 0;
       const payoutAmount = payoutTips + payoutGratuity;
-      const netPayout = Math.max(
-        0,
-        getNetPayout(item.isContributor, item.totalTips, item.totalGratuity, payoutAmount),
-      );
+
+      // Determine if this employee has earnings
+      const hasEarnings = isContributor ? tipTotal > 0 : payoutAmount > 0;
+
       return {
-        employeeGuid: item.employeeGuid,
-        employeeName: item.employeeName,
-        jobTitle: item.jobTitle,
-        isContributor: item.isContributor,
-        payoutReceiverId: item.payoutReceiverId,
-        payoutPercentage: isContributor ? item.payoutPercentage : receiverPayoutPercentage,
-        totalSales: item.totalSales,
-        netSales: item.netSales,
-        totalTips: item.totalTips,
-        totalGratuity: item.totalGratuity,
-        overallTips: item.overallTips,
-        overallGratuity: item.overallGratuity,
+        item,
+        isContributor,
+        isManual,
+        hasHours,
+        receiverPayoutPercentage,
         payoutTips,
         payoutGratuity,
-        netPayout,
+        payoutAmount,
+        hasEarnings,
       };
     });
+
+    // Count employees with earnings for prepayout calculation
+    const employeesWithEarnings = employeePayouts.filter((e) => e.hasEarnings).length;
+
+    // Recalculate prepayout per person based on employees with earnings
+    const prepayoutPerPerson =
+      employeesWithEarnings > 0 && existingPrepayoutTotal > 0
+        ? roundCurrency(existingPrepayoutTotal / employeesWithEarnings)
+        : 0;
+
+    // Second pass: build final items with deductions
+    return employeePayouts.map(
+      ({
+        item,
+        isContributor,
+        receiverPayoutPercentage,
+        payoutTips,
+        payoutGratuity,
+        payoutAmount,
+        hasEarnings,
+      }) => {
+        // Apply deductions only to employees with earnings
+        const prepayoutDeduction = hasEarnings ? prepayoutPerPerson : 0;
+        const payoutFee = hasEarnings ? originalFeePerPerson : 0;
+
+        // Calculate net payout with deductions
+        const grossPayout =
+          Number(item.totalTips || 0) + Number(item.totalGratuity || 0) + payoutAmount;
+        const netPayout = Math.max(0, grossPayout - prepayoutDeduction - payoutFee);
+
+        return {
+          employeeGuid: item.employeeGuid,
+          employeeName: item.employeeName,
+          jobTitle: item.jobTitle,
+          isContributor: item.isContributor,
+          payoutReceiverId: item.payoutReceiverId,
+          payoutPercentage: isContributor ? item.payoutPercentage : receiverPayoutPercentage,
+          totalSales: item.totalSales,
+          netSales: item.netSales,
+          totalTips: item.totalTips,
+          totalGratuity: item.totalGratuity,
+          overallTips: item.overallTips,
+          overallGratuity: item.overallGratuity,
+          payoutTips,
+          payoutGratuity,
+          netPayout,
+          prepayoutDeduction,
+          payoutFee,
+        };
+      },
+    );
   };
 
   const getMissingRoles = (schedule: ApprovalScheduleWithContributors) => {
@@ -564,10 +683,10 @@ export default function Reconciliation() {
                       {schedule.payoutRuleLabel}
                     </span>
                     <span className="rounded-full border border-gray-200 bg-white px-3 py-1 text-black">
-                      Contributors: {schedule.contributorCount}
+                      Contributors: {schedule.contributors.filter(c => c.isContributor === "Yes").length}
                     </span>
                     <span className="rounded-full border border-gray-200 bg-white px-3 py-1 text-black">
-                      Receivers: {schedule.receiverCount}
+                      Receivers: {schedule.contributors.filter(c => c.isContributor === "No" && (c.hoursWorked ?? 0) > 0).length}
                     </span>
                   </div>
                   <div className="flex justify-end">
@@ -621,8 +740,37 @@ export default function Reconciliation() {
                       </button>
                       <button
                         type="button"
-                        onClick={(event) => {
+                        onClick={async (event) => {
                           event.stopPropagation();
+
+                          // Save snapshot of current state for audit trail
+                          if (restaurantId && userId && schedule.businessDate) {
+                            const snapshotItems: ApprovalSnapshotItem[] = schedule.contributors.map((contributor) => ({
+                              employeeGuid: contributor.employeeGuid,
+                              employeeName: contributor.employeeName,
+                              jobTitle: contributor.jobTitle,
+                              fieldName: "PAYOUT_PERCENTAGE",
+                              currentValue: String(contributor.payoutPercentage ?? 0),
+                            }));
+                            // Add net payout values to snapshot
+                            schedule.contributors.forEach((contributor) => {
+                              snapshotItems.push({
+                                employeeGuid: contributor.employeeGuid,
+                                employeeName: contributor.employeeName,
+                                jobTitle: contributor.jobTitle,
+                                fieldName: "NET_PAYOUT",
+                                currentValue: String(contributor.netPayout ?? 0),
+                              });
+                            });
+                            await saveApprovalSnapshot({
+                              restaurantId,
+                              payoutScheduleId: schedule.payoutScheduleId,
+                              businessDate: schedule.businessDate,
+                              userId,
+                              items: snapshotItems,
+                            });
+                          }
+
                           setExpandedScheduleKeys((current) => {
                             const next = new Set(current);
                             next.add(scheduleKey);
@@ -674,35 +822,101 @@ export default function Reconciliation() {
                   </div>
                 </div>
 
-                <div className="mt-4 grid gap-3 sm:grid-cols-2 md:grid-cols-4">
-                  <div>
-                    <p className="text-xs font-semibold uppercase text-gray-500">Sales</p>
-                    <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-gray-700">
-                      <span className="font-semibold text-gray-600">Total:</span>
-                      <span>{formatCurrency(schedule.totalSales)}</span>
-                      <span className="text-gray-400">|</span>
-                      <span className="font-semibold text-gray-600">Net:</span>
-                      <span>{formatCurrency(schedule.netSales)}</span>
-                    </p>
-                  </div>
-                  <div className="md:col-start-2 md:col-span-2 md:justify-self-center">
-                    <p className="text-xs font-semibold uppercase text-gray-500">Tips &amp; Gratuity</p>
-                    <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-gray-700">
-                      <span className="font-semibold text-gray-600">Tips:</span>
-                      <span>{formatCurrency(schedule.totalTips)}</span>
-                      <span className="text-gray-400">|</span>
-                      <span className="font-semibold text-gray-600">Gratuity:</span>
-                      <span>{formatCurrency(schedule.totalGratuity)}</span>
-                      <span className="text-gray-400">|</span>
-                      <span className="font-semibold text-gray-600">Total:</span>
-                      <span>{formatCurrency(schedule.totalTips + schedule.totalGratuity)}</span>
-                    </p>
-                  </div>
-                  <div className="md:col-start-4 justify-self-start text-left md:pl-4">
-                    <p className="text-xs font-semibold uppercase text-gray-500">Orders</p>
-                    <p className="mt-1 text-sm text-gray-700">
-                      {(schedule.orderCount ?? 0).toLocaleString()}
-                    </p>
+                {/* Summary Section */}
+                <div className="mt-4 rounded-lg border border-gray-200 bg-white p-4">
+                  <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-500">
+                    Payout Summary
+                  </h3>
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    {/* Tips & Gratuity */}
+                    <div className="rounded-md bg-gray-50 p-3">
+                      <p className="text-xs font-medium text-gray-500">Tips</p>
+                      <p className="mt-1 text-lg font-semibold text-gray-900">
+                        {formatCurrency(schedule.totalTips)}
+                      </p>
+                    </div>
+                    <div className="rounded-md bg-gray-50 p-3">
+                      <p className="text-xs font-medium text-gray-500">Gratuity</p>
+                      <p className="mt-1 text-lg font-semibold text-gray-900">
+                        {formatCurrency(schedule.totalGratuity)}
+                      </p>
+                    </div>
+                    <div className="rounded-md bg-green-50 p-3">
+                      <p className="text-xs font-medium text-green-700">Total (Tips + Gratuity)</p>
+                      <p className="mt-1 text-lg font-semibold text-green-800">
+                        {formatCurrency(schedule.totalTips + schedule.totalGratuity)}
+                      </p>
+                    </div>
+                    <div className="rounded-md bg-gray-50 p-3">
+                      <p className="text-xs font-medium text-gray-500">Total Orders</p>
+                      <p className="mt-1 text-lg font-semibold text-gray-900">
+                        {(schedule.orderCount ?? 0).toLocaleString()}
+                      </p>
+                    </div>
+                    {/* Sales */}
+                    <div className="rounded-md bg-gray-50 p-3">
+                      <p className="text-xs font-medium text-gray-500">Total Sales</p>
+                      <p className="mt-1 text-lg font-semibold text-gray-900">
+                        {formatCurrency(schedule.totalSales)}
+                      </p>
+                    </div>
+                    <div className="rounded-md bg-gray-50 p-3">
+                      <p className="text-xs font-medium text-gray-500">Net Sales</p>
+                      <p className="mt-1 text-lg font-semibold text-gray-900">
+                        {formatCurrency(schedule.netSales)}
+                      </p>
+                    </div>
+                    {/* Prepayout & Fee */}
+                    {(() => {
+                      // Sum actual prepayout deductions from all contributors (only those with deductions)
+                      const totalPrepayout = schedule.contributors.reduce(
+                        (sum, c) => sum + (c.prepayoutDeduction || 0),
+                        0
+                      );
+                      const employeesWithPrepayout = schedule.contributors.filter(
+                        (c) => (c.prepayoutDeduction || 0) > 0
+                      ).length;
+                      const prepayoutPerPerson = employeesWithPrepayout > 0
+                        ? totalPrepayout / employeesWithPrepayout
+                        : 0;
+                      // Sum actual payout fees from all contributors (only those with fees)
+                      const totalPayoutFee = schedule.contributors.reduce(
+                        (sum, c) => sum + (c.payoutFee || 0),
+                        0
+                      );
+                      const employeesWithFee = schedule.contributors.filter(
+                        (c) => (c.payoutFee || 0) > 0
+                      ).length;
+                      const feePerPerson = employeesWithFee > 0
+                        ? totalPayoutFee / employeesWithFee
+                        : 0;
+                      return (
+                        <>
+                          <div className="rounded-md bg-amber-50 p-3">
+                            <p className="text-xs font-medium text-amber-700">Prepayout Amount</p>
+                            <p className="mt-1 text-lg font-semibold text-amber-800">
+                              {formatCurrency(totalPrepayout)}
+                              {employeesWithPrepayout > 0 ? (
+                                <span className="ml-1 text-xs font-normal text-amber-600">
+                                  ({formatCurrency(prepayoutPerPerson)}/person × {employeesWithPrepayout})
+                                </span>
+                              ) : null}
+                            </p>
+                          </div>
+                          <div className="rounded-md bg-amber-50 p-3">
+                            <p className="text-xs font-medium text-amber-700">Payout Transfer Fee</p>
+                            <p className="mt-1 text-lg font-semibold text-amber-800">
+                              {formatCurrency(totalPayoutFee)}
+                              {employeesWithFee > 0 ? (
+                                <span className="ml-1 text-xs font-normal text-amber-600">
+                                  ({formatCurrency(feePerPerson)}/person × {employeesWithFee})
+                                </span>
+                              ) : null}
+                            </p>
+                          </div>
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -792,10 +1006,11 @@ export default function Reconciliation() {
                                       return (
                                         <div
                               key={employeeKey}
-                              className="rounded-lg border border-gray-200 bg-[#f4f2ee] p-5"
+                              className="rounded-lg border border-gray-200 bg-white overflow-hidden"
                             >
+                              {/* Collapsed Row - Single Line */}
                               <div
-                                className="flex flex-wrap items-start justify-between gap-4"
+                                className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-gray-50 transition-colors"
                                 role="button"
                                 tabIndex={0}
                                 onClick={() =>
@@ -814,158 +1029,144 @@ export default function Reconciliation() {
                                   }
                                 }}
                               >
-                                <div>
-                                  <div className="grid w-full items-start gap-4 md:grid-cols-[280px_1fr]">
-                                    <h3 className="text-base font-semibold text-gray-900 md:pr-2">
-                                      <span>
-                                        {contributor.employeeName}
-                                        {contributor.jobTitle ? ` (${contributor.jobTitle})` : ""}
-                                      </span>
-                                    </h3>
-                                    <div className="grid w-full items-center gap-4 md:grid-cols-[150px_150px_260px_220px_180px]">
-                                      <span className="whitespace-nowrap rounded-full bg-white px-3 py-1 text-sm text-black">
-                                        Tips: {formatCurrency(contributor.totalTips)}
-                                      </span>
-                                      <span className="whitespace-nowrap rounded-full bg-white px-3 py-1 text-sm text-black">
-                                        Gratuity: {formatCurrency(contributor.totalGratuity)}
-                                      </span>
-                                      <span className="whitespace-nowrap rounded-full bg-white px-3 py-1 text-sm text-black">
-                                        Total (Tips &amp; Gratuity):{" "}
-                                        {formatCurrency(contributor.totalTips + contributor.totalGratuity)}
-                                      </span>
-                                      <span className="min-w-[160px] whitespace-nowrap rounded-full bg-white px-3 py-1 text-sm text-black">
-                                        Payout:{" "}
-                                        <span className="font-semibold text-red-600">
-                                          {payoutPercentageDisplay.toFixed(2)}%
-                                        </span>{" "}
-                                        (
-                                        <span className="font-semibold text-red-600">
-                                          {formatPayoutAmount(payoutDisplay)}
-                                        </span>
-                                        )
-                                      </span>
-                                      <span className="whitespace-nowrap rounded-full bg-white pl-3 pr-2 py-1 text-sm font-normal text-black">
-                                        Net Payout: {formatCurrency(netPayoutDisplay)}
-                                      </span>
-                                    </div>
+                                {/* Expand/Collapse Icon */}
+                                <div className="flex items-center gap-3 min-w-0 flex-1">
+                                  <svg
+                                    className={`h-4 w-4 text-gray-400 transition-transform ${isExpanded ? "rotate-90" : ""}`}
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                    stroke="currentColor"
+                                  >
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                  </svg>
+                                  <div className="min-w-0">
+                                    <span className="font-medium text-gray-900 truncate">
+                                      {contributor.employeeName}
+                                    </span>
+                                    {contributor.jobTitle && (
+                                      <span className="ml-2 text-sm text-gray-500">({contributor.jobTitle})</span>
+                                    )}
                                   </div>
-                                  <p className="mt-2 text-xs text-gray-500">{contributor.employeeGuid}</p>
                                 </div>
-                                <div className="flex flex-wrap items-center gap-3 text-sm text-gray-600" />
+                                {/* Summary Stats in Collapsed View - Contributors */}
+                                {(() => {
+                                  const tips = Number(contributor.totalTips || 0);
+                                  const gratuity = Number(contributor.totalGratuity || 0);
+                                  const total = tips + gratuity;
+                                  const rate = payoutPercentageDisplay;
+                                  const payout = -payoutDisplay;
+                                  const prepayout = contributor.prepayoutDeduction || 0;
+                                  const transferFee = contributor.payoutFee || 0;
+                                  const netValue = contributor.netPayout ?? netPayoutDisplay;
+                                  const payoutFormatted = formatAmountWithSign(payout);
+                                  const netFormatted = formatAmountWithSign(netValue);
+
+                                  return (
+                                    <div className="grid grid-cols-8 gap-2 text-sm" style={{ minWidth: "700px" }}>
+                                      <div className="text-right">
+                                        <span className="text-gray-500">Tips: </span>
+                                        <span className="font-medium">{formatCurrency(tips)}</span>
+                                      </div>
+                                      <div className="text-right">
+                                        <span className="text-gray-500">Gratuity: </span>
+                                        <span className="font-medium">{formatCurrency(gratuity)}</span>
+                                      </div>
+                                      <div className="text-right">
+                                        <span className="text-gray-500">Total: </span>
+                                        <span className="font-medium">{formatCurrency(total)}</span>
+                                      </div>
+                                      <div className="text-right">
+                                        <span className="text-gray-500">Rate: </span>
+                                        <span className="font-medium">{rate.toFixed(2)}%</span>
+                                      </div>
+                                      <div className="text-right">
+                                        <span className="text-gray-500">Payout: </span>
+                                        <span className={`font-medium ${payoutFormatted.className}`}>{payoutFormatted.text}</span>
+                                      </div>
+                                      <div className="text-right">
+                                        <span className="text-gray-500">Prepayout: </span>
+                                        <span className={`font-medium ${prepayout > 0 ? "text-red-600" : ""}`}>
+                                          {prepayout > 0 ? `(${formatCurrency(prepayout)})` : formatCurrency(0)}
+                                        </span>
+                                      </div>
+                                      <div className="text-right">
+                                        <span className="text-gray-500">Fee: </span>
+                                        <span className={`font-medium ${transferFee > 0 ? "text-red-600" : ""}`}>
+                                          {transferFee > 0 ? `(${formatCurrency(transferFee)})` : formatCurrency(0)}
+                                        </span>
+                                      </div>
+                                      <div className="text-right">
+                                        <span className="text-gray-500">Net: </span>
+                                        <span className={`font-medium ${netFormatted.className}`}>{netFormatted.text}</span>
+                                      </div>
+                                    </div>
+                                  );
+                                })()}
                               </div>
 
-                              {isExpanded ? (
-                                <>
-                                  <div className="mt-4 grid grid-cols-4 gap-6">
+                              {/* Expanded Details */}
+                              {isExpanded && (
+                                <div className="border-t border-gray-100 bg-gray-50 px-4 py-4">
+                                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                                    {/* Time & Hours */}
                                     <div>
-                                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
-                                        In/Out time
+                                      <p className="text-xs font-medium uppercase text-gray-500">Shift Time</p>
+                                      <p className="mt-1 text-sm text-gray-900">
+                                        {formatValue(contributor.inTime)} - {formatValue(contributor.outTime)}
                                       </p>
-                                      <p className="mt-2 flex flex-wrap items-center gap-2 text-sm text-gray-900">
-                                        <span className="font-semibold text-gray-600">In:</span>
-                                        <span>{formatValue(contributor.inTime)}</span>
-                                        <span className="text-gray-400">|</span>
-                                        <span className="font-semibold text-gray-600">Out:</span>
-                                        <span>{formatValue(contributor.outTime)}</span>
+                                      <p className="text-xs text-gray-500">
+                                        {contributor.hoursWorked?.toFixed(2) ?? "0.00"} hours
                                       </p>
                                     </div>
+                                    {/* Sales */}
                                     <div>
-                                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Hours worked</p>
-                                      <p className="mt-2 text-sm font-semibold text-gray-900">
-                                        {contributor.hoursWorked ? contributor.hoursWorked.toFixed(2) : "0.00"}
+                                      <p className="text-xs font-medium uppercase text-gray-500">Sales</p>
+                                      <p className="mt-1 text-sm text-gray-900">
+                                        Total: {formatCurrency(contributor.totalSales)}
+                                      </p>
+                                      <p className="text-xs text-gray-500">
+                                        Net: {formatCurrency(contributor.netSales)}
                                       </p>
                                     </div>
-                                    <div className="text-center">
-                                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Sales</p>
-                                      <p className="mt-2 flex flex-wrap items-center justify-center gap-2 text-sm text-gray-900">
-                                        <span className="font-semibold text-gray-600">Total:</span>
-                                        <span>{formatCurrency(contributor.totalSales)}</span>
-                                        <span className="text-gray-400">|</span>
-                                        <span className="font-semibold text-gray-600">Net:</span>
-                                        <span>{formatCurrency(contributor.netSales)}</span>
-                                      </p>
-                                    </div>
-                                    <div className="text-center">
-                                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Orders</p>
-                                      <p className="mt-2 text-sm font-semibold text-gray-900">
+                                    {/* Orders */}
+                                    <div>
+                                      <p className="text-xs font-medium uppercase text-gray-500">Orders</p>
+                                      <p className="mt-1 text-sm text-gray-900">
                                         {(contributor.orderCount ?? 0).toLocaleString()}
                                       </p>
                                     </div>
-                                    <div />
-                                  </div>
-
-                                  <div className="mt-0">
-                                    <h4 className="text-sm font-semibold text-gray-900">Payout details</h4>
-                                    <div className="mt-3 grid items-start gap-2 grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(160px,auto)_minmax(160px,auto)]">
-                                      <div>
-                                        <p className="text-xs font-semibold uppercase text-gray-500">
-                                          Tips &amp; Gratuity
-                                        </p>
-                                        <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-gray-700">
-                                          <span className="font-semibold text-gray-600">Tips:</span>
-                                          <span>{formatCurrency(contributor.totalTips)}</span>
-                                          <span className="text-gray-400">|</span>
-                                          <span className="font-semibold text-gray-600">Gratuity:</span>
-                                          <span>{formatCurrency(contributor.totalGratuity)}</span>
-                                          <span className="text-gray-400">|</span>
-                                          <span className="font-semibold text-gray-600">Total:</span>
-                                          <span>{formatCurrency(contributor.totalTips + contributor.totalGratuity)}</span>
-                                        </p>
-                                      </div>
-                                      <div>
-                                        <p className="text-xs font-semibold uppercase text-gray-500">Payout</p>
-                                      <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-gray-700">
-                                        <span className="font-semibold text-gray-600">Tips:</span>
-                                        <span className="font-semibold text-red-600">
-                                          {formatCurrency(Math.abs(payoutTipsDisplay))}
-                                        </span>
-                                        <span className="text-gray-400">|</span>
-                                        <span className="font-semibold text-gray-600">Gratuity:</span>
-                                        <span className="font-semibold text-red-600">
-                                          {formatCurrency(Math.abs(payoutGratuityDisplay))}
-                                        </span>
-                                        <span className="text-gray-400">|</span>
-                                        <span className="font-semibold text-gray-600">Total:</span>
-                                        <span className="font-semibold text-red-600">
-                                          {formatCurrency(Math.abs(payoutTipsDisplay + payoutGratuityDisplay))}
-                                        </span>
+                                    {/* Payout Breakdown */}
+                                    <div>
+                                      <p className="text-xs font-medium uppercase text-gray-500">Payout Breakdown</p>
+                                      <p className="mt-1 text-sm text-gray-900">
+                                        Rate: <span className="font-medium text-red-600">{payoutPercentageDisplay.toFixed(2)}%</span>
+                                      </p>
+                                      <p className="text-xs text-gray-500">
+                                        Tips: {formatCurrency(payoutTipsDisplay)} | Gratuity: {formatCurrency(payoutGratuityDisplay)}
                                       </p>
                                     </div>
-                                      {(() => {
-                                        const netContributorPercentage = isEligible
-                                          ? Math.max(0, 100 - Math.abs(totalReceiverPercentage))
-                                          : 0;
-                                        return (
-                                          <label className="-ml-[36px] text-xs font-semibold uppercase tracking-wide text-gray-500">
-                                          Payout percentage
-                                          <input
-                                            readOnly
-                                          value={`${netContributorPercentage.toFixed(2)}%`}
-                                          className="mt-3 w-[140px] rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-black"
-                                          />
-                                        </label>
-                                        );
-                                      })()}
-                                      <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">
-                                        Net payout
-                                        <div className="mt-2 text-sm font-semibold text-gray-900">
-                                          {formatCurrency(
-                                            Math.max(
-                                              0,
-                                              getNetPayout(
-                                                contributor.isContributor,
-                                                contributor.totalTips,
-                                                contributor.totalGratuity,
-                                                effectivePayoutShare,
-                                              ),
-                                            ),
-                                          )}
+                                    {/* Deductions */}
+                                    {(contributor.prepayoutDeduction || contributor.payoutFee) && (
+                                      <div className="sm:col-span-2">
+                                        <p className="text-xs font-medium uppercase text-gray-500">Deductions</p>
+                                        <div className="mt-1 flex gap-4 text-sm">
+                                          {contributor.prepayoutDeduction ? (
+                                            <span>
+                                              Prepayout: <span className="text-red-600">({formatCurrency(contributor.prepayoutDeduction)})</span>
+                                            </span>
+                                          ) : null}
+                                          {contributor.payoutFee ? (
+                                            <span>
+                                              Transfer Fee: <span className="text-red-600">({formatCurrency(contributor.payoutFee)})</span>
+                                            </span>
+                                          ) : null}
                                         </div>
                                       </div>
-                                    </div>
+                                    )}
                                   </div>
-                                </>
-                                          ) : null}
+                                  <p className="mt-3 text-xs text-gray-400">ID: {contributor.employeeGuid}</p>
+                                </div>
+                              )}
                                         </div>
                                       );
                                     })
@@ -1026,10 +1227,11 @@ export default function Reconciliation() {
                                         return (
                                           <div
                                             key={employeeKey}
-                                            className="rounded-lg border border-gray-200 bg-[#f4f2ee] p-5"
+                                            className="rounded-lg border border-gray-200 bg-white overflow-hidden"
                                           >
+                                            {/* Collapsed Row - Single Line */}
                                             <div
-                                              className="flex flex-wrap items-start justify-between gap-4"
+                                              className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-gray-50 transition-colors"
                                               role="button"
                                               tabIndex={0}
                                               onClick={() =>
@@ -1048,175 +1250,157 @@ export default function Reconciliation() {
                                                 }
                                               }}
                                             >
-                                              <div>
-                                              <div className="grid w-full items-start gap-4 md:grid-cols-[280px_1fr]">
-                                                <h3 className="text-base font-semibold text-gray-900 md:pr-2">
-                                                  <span>
+                                              {/* Expand/Collapse Icon */}
+                                              <div className="flex items-center gap-3 min-w-0 flex-1">
+                                                <svg
+                                                  className={`h-4 w-4 text-gray-400 transition-transform ${isExpanded ? "rotate-90" : ""}`}
+                                                  fill="none"
+                                                  viewBox="0 0 24 24"
+                                                  stroke="currentColor"
+                                                >
+                                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                                </svg>
+                                                <div className="min-w-0">
+                                                  <span className="font-medium text-gray-900 truncate">
                                                     {contributor.employeeName}
-                                                    {contributor.jobTitle ? ` (${contributor.jobTitle})` : ""}
                                                   </span>
-                                                </h3>
-                                                <div className="grid w-full items-center gap-4 md:grid-cols-[150px_150px_260px_220px_180px]">
-                                                  <span className="whitespace-nowrap rounded-full bg-white px-3 py-1 text-sm text-black">
-                                                    Tips: {formatCurrency(contributor.totalTips)}
-                                                  </span>
-                                                  <span className="whitespace-nowrap rounded-full bg-white px-3 py-1 text-sm text-black">
-                                                    Gratuity: {formatCurrency(contributor.totalGratuity)}
-                                                  </span>
-                                                  <span className="whitespace-nowrap rounded-full bg-white px-3 py-1 text-sm text-black">
-                                                    Total (Tips &amp; Gratuity):{" "}
-                                                    {formatCurrency(contributor.totalTips + contributor.totalGratuity)}
-                                                  </span>
-                                                  <span className="min-w-[160px] whitespace-nowrap rounded-full bg-white px-3 py-1 text-sm text-black">
-                                                    Payout: {payoutPercentageDisplay.toFixed(2)}% (
-                                                    <span
-                                                      className={
-                                                        payoutDisplay === 0
-                                                          ? "font-semibold text-gray-500"
-                                                          : payoutDisplay < 0
-                                                          ? "font-semibold text-red-600"
-                                                          : "font-semibold text-emerald-700"
-                                                      }
-                                                    >
-                                                      {formatPayoutAmount(payoutDisplay)}
-                                                    </span>
-                                                    )
-                                                  </span>
-                                                  <span className="whitespace-nowrap rounded-full bg-white pl-3 pr-2 py-1 text-sm font-normal text-black">
-                                                    Net Payout: {formatCurrency(netPayoutDisplay)}
-                                                  </span>
+                                                  {contributor.jobTitle && (
+                                                    <span className="ml-2 text-sm text-gray-500">({contributor.jobTitle})</span>
+                                                  )}
                                                 </div>
                                               </div>
-                                                <p className="mt-2 text-xs text-gray-500">{contributor.employeeGuid}</p>
-                                              </div>
-                                              <div className="flex flex-wrap items-center gap-3 text-sm text-gray-600" />
+                                              {/* Summary Stats in Collapsed View - Receivers */}
+                                              {(() => {
+                                                const rate = payoutPercentageDisplay;
+                                                const payout = payoutDisplay;
+                                                const prepayout = contributor.prepayoutDeduction || 0;
+                                                const transferFee = contributor.payoutFee || 0;
+                                                const netValue = contributor.netPayout ?? netPayoutDisplay;
+                                                const payoutFormatted = formatAmountWithSign(payout);
+                                                const netFormatted = formatAmountWithSign(netValue);
+
+                                                return (
+                                                  <div className="grid grid-cols-8 gap-2 text-sm" style={{ minWidth: "700px" }}>
+                                                    {/* Empty columns 1-3 to align with contributors */}
+                                                    <div></div>
+                                                    <div></div>
+                                                    <div></div>
+                                                    <div className="text-right">
+                                                      <span className="text-gray-500">Rate: </span>
+                                                      <span className="font-medium">{rate.toFixed(2)}%</span>
+                                                    </div>
+                                                    <div className="text-right">
+                                                      <span className="text-gray-500">Payout: </span>
+                                                      <span className={`font-medium ${payoutFormatted.className}`}>{payoutFormatted.text}</span>
+                                                    </div>
+                                                    <div className="text-right">
+                                                      <span className="text-gray-500">Prepayout: </span>
+                                                      <span className={`font-medium ${prepayout > 0 ? "text-red-600" : ""}`}>
+                                                        {prepayout > 0 ? `(${formatCurrency(prepayout)})` : formatCurrency(0)}
+                                                      </span>
+                                                    </div>
+                                                    <div className="text-right">
+                                                      <span className="text-gray-500">Fee: </span>
+                                                      <span className={`font-medium ${transferFee > 0 ? "text-red-600" : ""}`}>
+                                                        {transferFee > 0 ? `(${formatCurrency(transferFee)})` : formatCurrency(0)}
+                                                      </span>
+                                                    </div>
+                                                    <div className="text-right">
+                                                      <span className="text-gray-500">Net: </span>
+                                                      <span className={`font-medium ${netFormatted.className}`}>{netFormatted.text}</span>
+                                                    </div>
+                                                  </div>
+                                                );
+                                              })()}
                                             </div>
 
-                                            {isExpanded ? (
-                                              <>
-                                                <div className="mt-4 grid grid-cols-4 gap-6">
+                                            {/* Expanded Details */}
+                                            {isExpanded && (
+                                              <div className="border-t border-gray-100 bg-gray-50 px-4 py-4">
+                                                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                                                  {/* Time & Hours */}
                                                   <div>
-                                                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
-                                                      In/Out time
+                                                    <p className="text-xs font-medium uppercase text-gray-500">Shift Time</p>
+                                                    <p className="mt-1 text-sm text-gray-900">
+                                                      {formatValue(contributor.inTime)} - {formatValue(contributor.outTime)}
                                                     </p>
-                                                    <p className="mt-2 flex flex-wrap items-center gap-2 text-sm text-gray-900">
-                                                      <span className="font-semibold text-gray-600">In:</span>
-                                                      <span>{formatValue(contributor.inTime)}</span>
-                                                      <span className="text-gray-400">|</span>
-                                                      <span className="font-semibold text-gray-600">Out:</span>
-                                                      <span>{formatValue(contributor.outTime)}</span>
+                                                    <p className="text-xs text-gray-500">
+                                                      {contributor.hoursWorked?.toFixed(2) ?? "0.00"} hours
                                                     </p>
                                                   </div>
+                                                  {/* Sales */}
                                                   <div>
-                                                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Hours worked</p>
-                                                    <p className="mt-2 text-sm font-semibold text-gray-900">
-                                                      {contributor.hoursWorked ? contributor.hoursWorked.toFixed(2) : "0.00"}
+                                                    <p className="text-xs font-medium uppercase text-gray-500">Sales</p>
+                                                    <p className="mt-1 text-sm text-gray-900">
+                                                      Total: {formatCurrency(contributor.totalSales)}
+                                                    </p>
+                                                    <p className="text-xs text-gray-500">
+                                                      Net: {formatCurrency(contributor.netSales)}
                                                     </p>
                                                   </div>
-                                                  <div className="text-center">
-                                                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Sales</p>
-                                                    <p className="mt-2 flex flex-wrap items-center justify-center gap-2 text-sm text-gray-900">
-                                                      <span className="font-semibold text-gray-600">Total:</span>
-                                                      <span>{formatCurrency(contributor.totalSales)}</span>
-                                                      <span className="text-gray-400">|</span>
-                                                      <span className="font-semibold text-gray-600">Net:</span>
-                                                      <span>{formatCurrency(contributor.netSales)}</span>
-                                                    </p>
-                                                  </div>
-                                                  <div className="text-center">
-                                                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Orders</p>
-                                                    <p className="mt-2 text-sm font-semibold text-gray-900">
+                                                  {/* Orders */}
+                                                  <div>
+                                                    <p className="text-xs font-medium uppercase text-gray-500">Orders</p>
+                                                    <p className="mt-1 text-sm text-gray-900">
                                                       {(contributor.orderCount ?? 0).toLocaleString()}
                                                     </p>
                                                   </div>
-                                                  <div />
-                                                </div>
-
-                                                <div className="mt-0">
-                                                  <h4 className="text-sm font-semibold text-gray-900">Payout details</h4>
-                                                  <div className="mt-3 grid items-start gap-2 grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(160px,auto)_minmax(160px,auto)]">
-                                                    <div>
-                                                      <p className="text-xs font-semibold uppercase text-gray-500">
-                                                        Tips &amp; Gratuity
-                                                      </p>
-                                                      <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-gray-700">
-                                                        <span className="font-semibold text-gray-600">Tips:</span>
-                                                        <span>{formatCurrency(contributor.totalTips)}</span>
-                                                        <span className="text-gray-400">|</span>
-                                                        <span className="font-semibold text-gray-600">Gratuity:</span>
-                                                        <span>{formatCurrency(contributor.totalGratuity)}</span>
-                                                        <span className="text-gray-400">|</span>
-                                                        <span className="font-semibold text-gray-600">Total:</span>
-                                                        <span>{formatCurrency(contributor.totalTips + contributor.totalGratuity)}</span>
-                                                      </p>
+                                                  {/* Payout Breakdown */}
+                                                  <div>
+                                                    <p className="text-xs font-medium uppercase text-gray-500">Payout Breakdown</p>
+                                                    <p className="mt-1 text-sm text-gray-900">
+                                                      Tips: <span className="font-medium text-emerald-600">{formatCurrency(payoutTipsDisplay)}</span>
+                                                    </p>
+                                                    <p className="text-xs text-gray-500">
+                                                      Gratuity: {formatCurrency(payoutGratuityDisplay)}
+                                                    </p>
+                                                  </div>
+                                                  {/* Payout Percentage Edit (in Edit mode) */}
+                                                  {editingScheduleKey === scheduleKey && (
+                                                    <div className="sm:col-span-2">
+                                                      <label className="text-xs font-medium uppercase text-gray-500">
+                                                        Edit Payout Percentage
+                                                        <input
+                                                          key={`${scheduleKey}-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}-${resetToken}`}
+                                                          value={
+                                                            payoutEdits[
+                                                              `${scheduleKey}-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`
+                                                            ] ?? `${payoutPercentageDisplay.toFixed(2)}%`
+                                                          }
+                                                          onChange={(event) => {
+                                                            const key = `${scheduleKey}-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`;
+                                                            setPayoutEdits((current) => ({
+                                                              ...current,
+                                                              [key]: event.target.value,
+                                                            }));
+                                                          }}
+                                                          className="mt-1 block w-full max-w-[140px] rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
+                                                        />
+                                                      </label>
                                                     </div>
-                                                    <div>
-                                                      <p className="text-xs font-semibold uppercase text-gray-500">Payout</p>
-                                                      <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-gray-700">
-                                                        <span className="font-semibold text-gray-600">Tips:</span>
-                                                        <span
-                                                          className={
-                                                            payoutTipsDisplay > 0
-                                                              ? "font-semibold text-emerald-700"
-                                                              : "font-semibold text-red-600"
-                                                          }
-                                                        >
-                                                          {formatCurrency(payoutTipsDisplay)}
-                                                        </span>
-                                                        <span className="text-gray-400">|</span>
-                                                        <span className="font-semibold text-gray-600">Gratuity:</span>
-                                                        <span
-                                                          className={
-                                                            payoutGratuityDisplay > 0
-                                                              ? "font-semibold text-emerald-700"
-                                                              : "font-semibold text-red-600"
-                                                          }
-                                                        >
-                                                          {formatCurrency(payoutGratuityDisplay)}
-                                                        </span>
-                                                        <span className="text-gray-400">|</span>
-                                                        <span className="font-semibold text-gray-600">Total:</span>
-                                                        <span
-                                                          className={
-                                                            payoutTipsDisplay + payoutGratuityDisplay > 0
-                                                              ? "font-semibold text-emerald-700"
-                                                              : "font-semibold text-red-600"
-                                                          }
-                                                        >
-                                                          {formatCurrency(payoutTipsDisplay + payoutGratuityDisplay)}
-                                                        </span>
-                                                      </p>
-                                                    </div>
-                                                    <label className="-ml-[36px] text-xs font-semibold uppercase tracking-wide text-gray-500">
-                                                      Payout percentage
-                                                      <input
-                                                        key={`${scheduleKey}-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}-${resetToken}`}
-                                                        value={
-                                                        payoutEdits[
-                                                          `${scheduleKey}-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`
-                                                        ] ?? `${payoutPercentageDisplay.toFixed(2)}%`
-                                                      }
-                                                        readOnly={editingScheduleKey !== scheduleKey}
-                                                        onChange={(event) => {
-                                                          const key = `${scheduleKey}-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`;
-                                                          setPayoutEdits((current) => ({
-                                                            ...current,
-                                                            [key]: event.target.value,
-                                                          }));
-                                                        }}
-                                                        className="mt-3 w-[140px] rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700"
-                                                      />
-                                                    </label>
-                                                    <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">
-                                                      Net payout
-                                                      <div className="mt-2 text-sm font-semibold text-gray-900">
-                                                        {formatCurrency(netPayoutDisplay)}
+                                                  )}
+                                                  {/* Deductions */}
+                                                  {(contributor.prepayoutDeduction || contributor.payoutFee) && (
+                                                    <div className="sm:col-span-2">
+                                                      <p className="text-xs font-medium uppercase text-gray-500">Deductions</p>
+                                                      <div className="mt-1 flex gap-4 text-sm">
+                                                        {contributor.prepayoutDeduction ? (
+                                                          <span>
+                                                            Prepayout: <span className="text-amber-600">-{formatCurrency(contributor.prepayoutDeduction)}</span>
+                                                          </span>
+                                                        ) : null}
+                                                        {contributor.payoutFee ? (
+                                                          <span>
+                                                            Transfer Fee: <span className="text-amber-600">-{formatCurrency(contributor.payoutFee)}</span>
+                                                          </span>
+                                                        ) : null}
                                                       </div>
                                                     </div>
-                                                  </div>
+                                                  )}
                                                 </div>
-                                              </>
-                                            ) : null}
+                                                <p className="mt-3 text-xs text-gray-400">ID: {contributor.employeeGuid}</p>
+                                              </div>
+                                            )}
                                           </div>
                                         );
                                       })}
@@ -1798,6 +1982,7 @@ export default function Reconciliation() {
                                           contributorCount: nextContributorCount,
                                           receiverCount: nextReceiverCount,
                                         };
+                                        // Calculate the final values with proper deductions
                                         const payloadItems = buildApprovalItems(normalizedSchedule);
                                         if (normalizedSchedule.businessDate) {
                                           saveApprovalOverrides({
@@ -1807,7 +1992,24 @@ export default function Reconciliation() {
                                             items: payloadItems,
                                           });
                                         }
-                                        return normalizedSchedule;
+                                        // Update contributors with recalculated values from buildApprovalItems
+                                        const recalculatedContributors = payloadItems.map((item) => {
+                                          // Find matching original contributor to preserve extra fields
+                                          const original = normalizedSchedule.contributors.find(
+                                            (c) =>
+                                              c.employeeGuid === item.employeeGuid &&
+                                              c.jobTitle === item.jobTitle &&
+                                              c.isContributor === item.isContributor,
+                                          );
+                                          return {
+                                            ...original,
+                                            ...item,
+                                          } as ApprovalContributor;
+                                        });
+                                        return {
+                                          ...normalizedSchedule,
+                                          contributors: recalculatedContributors,
+                                        };
                                       }),
                                     );
                                     setEditingScheduleKey(null);
