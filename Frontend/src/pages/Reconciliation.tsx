@@ -2184,9 +2184,16 @@ export default function Reconciliation() {
                                               c.jobTitle === item.jobTitle &&
                                               c.isContributor === item.isContributor,
                                           );
+                                          // Check if net was edited for this employee - preserve the edited value
+                                          const netKey = `${scheduleKey}-net-${item.employeeGuid}-${item.jobTitle ?? "role"}`;
+                                          const editedNet = netEdits[netKey];
+                                          const finalNetPayout = editedNet !== undefined
+                                            ? (parseCurrency(editedNet) ?? item.netPayout)
+                                            : item.netPayout;
                                           return {
                                             ...original,
                                             ...item,
+                                            netPayout: finalNetPayout,
                                           } as ApprovalContributor;
                                         });
                                         return {
