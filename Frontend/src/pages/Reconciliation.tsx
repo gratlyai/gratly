@@ -416,9 +416,12 @@ export default function Reconciliation() {
         const payoutFee = hasEarnings ? originalFeePerPerson : 0;
 
         // Calculate net payout with deductions
+        // If item already has an edited netPayout, use that instead of recalculating
         const grossPayout =
           Number(item.totalTips || 0) + Number(item.totalGratuity || 0) + payoutAmount;
-        const netPayout = Math.max(0, grossPayout - prepayoutDeduction - payoutFee);
+        const calculatedNetPayout = Math.max(0, grossPayout - prepayoutDeduction - payoutFee);
+        // Use the existing netPayout if it was edited (differs from calculated), otherwise use calculated
+        const netPayout = item.netPayout !== undefined ? item.netPayout : calculatedNetPayout;
 
         return {
           employeeGuid: item.employeeGuid,
