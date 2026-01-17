@@ -39,6 +39,7 @@ class PayoutScheduleRow(BaseModel):
     start_time: Optional[str] = None
     end_time: Optional[str] = None
     payout_rule_id: Optional[str] = None
+    is_active: bool = True
 
 class PayoutScheduleDetail(BaseModel):
     payout_schedule_id: int
@@ -53,6 +54,7 @@ class PayoutScheduleDetail(BaseModel):
     custom_individual_payout: Optional[float] = None
     custom_group_contribution: Optional[float] = None
     pre_payouts: Optional[List[dict]] = None
+    is_active: bool = True
 
 def _parse_optional_float(value: Optional[object]) -> Optional[float]:
     if value is None:
@@ -230,7 +232,7 @@ def create_payout_schedule(payload: PayoutSchedulePayload):
         cursor.close()
 
 @router.get("/payout-schedules", response_model=List[PayoutScheduleRow])
-def list_payout_schedules(user_id: Optional[int] = None, restaurant_id: Optional[int] = None):
+def list_payout_schedules(user_id: Optional[int] = None, restaurant_id: Optional[int] = None, include_inactive: bool = False):
     resolved_restaurant_id = restaurant_id
     if resolved_restaurant_id is None:
         if user_id is None:
@@ -240,8 +242,13 @@ def list_payout_schedules(user_id: Optional[int] = None, restaurant_id: Optional
         raise HTTPException(status_code=404, detail="Restaurant not found for user")
     cursor = _get_cursor(dictionary=True)
     try:
+        # Build WHERE clause based on include_inactive parameter
+        where_clause = "WHERE RESTAURANTID = %s"
+        if not include_inactive:
+            where_clause += " AND (IS_ACTIVE IS NULL OR IS_ACTIVE = TRUE)"
+
         cursor.execute(
-            """
+            f"""
             SELECT
                 PAYOUT_SCHEDULEID AS payout_schedule_id,
                 NAME AS name,
@@ -249,10 +256,11 @@ def list_payout_schedules(user_id: Optional[int] = None, restaurant_id: Optional
                 END_DAY AS end_day,
                 START_TIME AS start_time,
                 END_TIME AS end_time,
-                PAYOUT_RULE_ID AS payout_rule_id
+                PAYOUT_RULE_ID AS payout_rule_id,
+                COALESCE(IS_ACTIVE, TRUE) AS is_active
             FROM GRATLYDB.PAYOUT_SCHEDULE
-            WHERE RESTAURANTID = %s
-            ORDER BY CREATEDDATE DESC
+            {where_clause}
+            ORDER BY IS_ACTIVE DESC, CREATEDDATE DESC
             """,
             (resolved_restaurant_id,),
         )
@@ -445,7 +453,8 @@ def get_payout_schedule(schedule_id: int, user_id: int):
                 END_TIME AS end_time,
                 PAYOUT_RULE_ID AS payout_rule_id,
                 PAYOUTTRIGGER_GRATUITY AS payouttrigger_gratuity,
-                PAYOUTTRIGGER_TIPS AS payouttrigger_tips
+                PAYOUTTRIGGER_TIPS AS payouttrigger_tips,
+                COALESCE(IS_ACTIVE, TRUE) AS is_active
             FROM GRATLYDB.PAYOUT_SCHEDULE
             WHERE PAYOUT_SCHEDULEID = %s AND RESTAURANTID = %s
             LIMIT 1
@@ -511,6 +520,7 @@ def get_payout_schedule(schedule_id: int, user_id: int):
             "custom_individual_payout": custom.get("individual_payout"),
             "custom_group_contribution": custom.get("group_contribution"),
             "pre_payouts": pre_payouts,
+            "is_active": schedule.get("is_active", True),
         }
     except pymysql.MySQLError as err:
         raise HTTPException(status_code=500, detail=f"Error fetching payout schedule: {err}")
@@ -537,27 +547,73 @@ def delete_payout_schedule(schedule_id: int, user_id: int):
         if not row:
             raise HTTPException(status_code=404, detail="Payout schedule not found")
 
-        conn.begin()
+        # Check if there are any payouts in PAYOUT_APPROVAL for this schedule
         cursor.execute(
-            "DELETE FROM GRATLYDB.PAYOUTRECEIVERS WHERE PAYOUT_SCHEDULEID = %s",
+            """
+            SELECT COUNT(*) as payout_count
+            FROM GRATLYDB.PAYOUT_APPROVAL
+            WHERE PAYOUT_SCHEDULEID = %s
+            """,
             (schedule_id,),
         )
+        payout_check = cursor.fetchone()
+        if payout_check and payout_check[0] > 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot archive this payout schedule because payouts exist for it in Approvals. Please resolve all payouts first."
+            )
+
+        # Archive the schedule by setting IS_ACTIVE to FALSE instead of deleting
         cursor.execute(
-            "DELETE FROM GRATLYDB.PAYOUT_CUSTOM WHERE PAYOUT_SCHEDULEID = %s",
-            (schedule_id,),
-        )
-        cursor.execute(
-            "DELETE FROM GRATLYDB.PREPAYOUT WHERE PAYOUT_SCHEDULEID = %s",
-            (schedule_id,),
-        )
-        cursor.execute(
-            "DELETE FROM GRATLYDB.PAYOUT_SCHEDULE WHERE PAYOUT_SCHEDULEID = %s",
+            """
+            UPDATE GRATLYDB.PAYOUT_SCHEDULE
+            SET IS_ACTIVE = FALSE
+            WHERE PAYOUT_SCHEDULEID = %s
+            """,
             (schedule_id,),
         )
         conn.commit()
         return {"success": True}
     except pymysql.MySQLError as err:
         conn.rollback()
-        raise HTTPException(status_code=500, detail=f"Error deleting payout schedule: {err}")
+        raise HTTPException(status_code=500, detail=f"Error archiving payout schedule: {err}")
+    finally:
+        cursor.close()
+
+
+@router.post("/payout-schedules/{schedule_id}/activate")
+def activate_payout_schedule(schedule_id: int, user_id: int):
+    restaurant_id = _fetch_restaurant_key(user_id)
+    if not restaurant_id:
+        raise HTTPException(status_code=404, detail="Restaurant not found for user")
+    cursor = _get_cursor(dictionary=False)
+    conn = cursor.connection
+    try:
+        cursor.execute(
+            """
+            SELECT PAYOUT_SCHEDULEID
+            FROM GRATLYDB.PAYOUT_SCHEDULE
+            WHERE PAYOUT_SCHEDULEID = %s AND RESTAURANTID = %s
+            """,
+            (schedule_id, restaurant_id),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Payout schedule not found")
+
+        # Activate the schedule by setting IS_ACTIVE to TRUE
+        cursor.execute(
+            """
+            UPDATE GRATLYDB.PAYOUT_SCHEDULE
+            SET IS_ACTIVE = TRUE
+            WHERE PAYOUT_SCHEDULEID = %s
+            """,
+            (schedule_id,),
+        )
+        conn.commit()
+        return {"success": True}
+    except pymysql.MySQLError as err:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error activating payout schedule: {err}")
     finally:
         cursor.close()
