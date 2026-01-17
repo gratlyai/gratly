@@ -1921,18 +1921,29 @@ def save_approval_overrides(payload: ApprovalOverridePayload):
                 (payload.payoutScheduleId, payload.businessDate),
             )
             snapshot_rows = cursor.fetchall()
+            logger.info(f"Found {len(snapshot_rows)} INITIAL_SNAPSHOT rows for schedule {payload.payoutScheduleId}, date {payload.businessDate}")
 
             # Build a lookup of initial values: (employeeGuid, jobTitle, fieldName) -> oldValue
+            # Normalize None to empty string for consistent key matching
             initial_values = {}
             for snap_row in snapshot_rows:
-                key = (snap_row["EMPLOYEEGUID"], snap_row["JOBTITLE"], snap_row["FIELD_NAME"])
+                emp_guid = snap_row["EMPLOYEEGUID"] or ""
+                job_title = snap_row["JOBTITLE"] or ""
+                field_name = snap_row["FIELD_NAME"] or ""
+                key = (emp_guid, job_title, field_name)
                 initial_values[key] = snap_row["OLD_VALUE"]
+                logger.debug(f"Snapshot key: {key}, value: {snap_row['OLD_VALUE']}")
 
             # Compare and record changes
             change_records = []
             for item in payload.items:
+                # Normalize None to empty string for key matching
+                item_emp_guid = item.employeeGuid or ""
+                item_job_title = item.jobTitle or ""
+
                 # Check NET_PAYOUT changes
-                net_key = (item.employeeGuid, item.jobTitle, "NET_PAYOUT")
+                net_key = (item_emp_guid, item_job_title, "NET_PAYOUT")
+                logger.debug(f"Looking for net_key: {net_key}, exists: {net_key in initial_values}")
                 if net_key in initial_values:
                     old_net = initial_values[net_key]
                     new_net = str(item.netPayout) if item.netPayout is not None else "0"
@@ -1960,7 +1971,8 @@ def save_approval_overrides(payload: ApprovalOverridePayload):
                         pass
 
                 # Check PAYOUT_PERCENTAGE changes
-                pct_key = (item.employeeGuid, item.jobTitle, "PAYOUT_PERCENTAGE")
+                pct_key = (item_emp_guid, item_job_title, "PAYOUT_PERCENTAGE")
+                logger.debug(f"Looking for pct_key: {pct_key}, exists: {pct_key in initial_values}")
                 if pct_key in initial_values:
                     old_pct = initial_values[pct_key]
                     new_pct = str(item.payoutPercentage) if item.payoutPercentage is not None else "0"
@@ -1987,6 +1999,7 @@ def save_approval_overrides(payload: ApprovalOverridePayload):
                         pass
 
             # Insert change records
+            logger.info(f"Recording {len(change_records)} change(s) to PAYOUT_APPROVAL_HISTORY")
             if change_records:
                 cursor.executemany(
                     """
