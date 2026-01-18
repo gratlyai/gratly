@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gratly | FAQs</title>
+    <link rel="icon" type="image/png" href="/gratlyfavicon.png" />
+    <style>
+      :root {
+        --bg: #f4f2ee;
+        --ink: #111827;
+        --muted: #6b7280;
+        --accent: #cab99a;
+        --line: #e5e7eb;
+        --highlight: #e6d7b8;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+        color: var(--ink);
+        background: var(--bg);
+      }
+
+      a {
+        text-decoration: none;
+        color: inherit;
+      }
+
+      .page {
+        min-height: 100vh;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .page::before,
+      .page::after {
+        content: "";
+        position: absolute;
+        border-radius: 999px;
+        opacity: 0.7;
+        z-index: 0;
+      }
+
+      .page::before {
+        width: 520px;
+        height: 520px;
+        background: radial-gradient(circle at 30% 30%, #ffffff 0%, #efe7d8 55%, transparent 70%);
+        top: -200px;
+        right: -120px;
+      }
+
+      .page::after {
+        width: 520px;
+        height: 520px;
+        background: radial-gradient(circle at 70% 70%, #ffffff 0%, #eadfcf 50%, transparent 70%);
+        bottom: -220px;
+        left: -160px;
+      }
+
+      .container {
+        width: min(1100px, 92vw);
+        margin: 0 auto;
+        position: relative;
+        z-index: 1;
+      }
+
+      .top-bar {
+        border-bottom: 2px solid var(--ink);
+        background: rgba(255, 255, 255, 0.7);
+      }
+
+      .top-bar .container {
+        width: 100%;
+        max-width: none;
+        padding: 0 40px;
+      }
+
+      header {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        align-items: center;
+        gap: 20px;
+        padding: 18px 32px;
+      }
+
+      .nav-links {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      .logo-link img {
+        height: 52px;
+        width: auto;
+        display: block;
+      }
+
+      .logo-link {
+        margin-right: 12px;
+      }
+
+      .nav-pill,
+      .nav-login {
+        padding: 8px 22px;
+        border-radius: 999px;
+        border: 2px solid var(--ink);
+        font-weight: 700;
+        font-size: 15px;
+        letter-spacing: 0.02em;
+        transition: all 0.2s ease;
+        background: transparent;
+      }
+
+      .nav-pill:hover,
+      .nav-login:hover {
+        background: var(--highlight);
+        color: var(--ink);
+      }
+
+      .hero {
+        padding: 60px 0 30px;
+      }
+
+      .hero h1 {
+        font-size: clamp(2.2rem, 4vw, 3.2rem);
+        margin: 0 0 12px;
+        letter-spacing: -0.02em;
+      }
+
+      .hero p {
+        margin: 0;
+        color: var(--muted);
+        max-width: 640px;
+        line-height: 1.6;
+      }
+
+      .faq-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 14px;
+        padding: 20px 0 40px;
+      }
+
+      details.faq-card {
+        background: rgba(255, 255, 255, 0.75);
+        border-radius: 18px;
+        padding: 0;
+        border: 2px solid var(--ink);
+        box-shadow: 0 16px 32px rgba(17, 24, 39, 0.08);
+        overflow: hidden;
+      }
+
+      details.faq-card summary {
+        cursor: pointer;
+        list-style: none;
+        padding: 18px 22px;
+        font-weight: 700;
+        font-size: 1.02rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      details.faq-card summary::-webkit-details-marker {
+        display: none;
+      }
+
+      details.faq-card summary::after {
+        content: "›";
+        font-size: 1.4rem;
+        font-weight: 700;
+        transform: translateY(-1px);
+      }
+
+      details.faq-card[open] summary::after {
+        content: "⌄";
+      }
+
+      .faq-body {
+        padding: 0 22px 18px;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .cta-band {
+        margin: 10px 0 40px;
+        background: #ffffff;
+        border-radius: 24px;
+        padding: 24px;
+        border: 2px solid var(--ink);
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        box-shadow: 0 24px 50px rgba(17, 24, 39, 0.1);
+      }
+
+      .question-box {
+        background: #ffffff;
+        border-radius: 24px;
+        padding: 24px;
+        border: 2px solid var(--ink);
+        box-shadow: 0 18px 40px rgba(17, 24, 39, 0.08);
+        margin-bottom: 40px;
+      }
+
+      .question-box h3 {
+        margin: 0 0 6px;
+      }
+
+      .question-form {
+        display: grid;
+        gap: 14px;
+        margin-top: 16px;
+      }
+
+      .form-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 14px;
+      }
+
+      .question-form input,
+      .question-form textarea {
+        width: 100%;
+        padding: 12px 14px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        font-size: 0.95rem;
+        font-family: inherit;
+        background: #f9f7f3;
+      }
+
+      .question-form textarea {
+        min-height: 130px;
+        resize: vertical;
+      }
+
+      .form-actions {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        flex-wrap: wrap;
+      }
+
+      .status {
+        font-weight: 600;
+        color: var(--muted);
+      }
+
+      .btn-primary {
+        background: var(--accent);
+        color: #111111;
+        border: 2px solid var(--ink);
+        padding: 12px 18px;
+        border-radius: 14px;
+        font-weight: 700;
+        font-size: 15px;
+        box-shadow: 0 14px 28px rgba(17, 24, 39, 0.12);
+        transition: all 0.2s ease;
+      }
+
+      .btn-primary:hover {
+        background: var(--highlight);
+        transform: translateY(-2px);
+      }
+
+      footer {
+        margin-top: 40px;
+        padding: 32px 0 40px;
+        color: var(--ink);
+        font-size: 0.95rem;
+        text-align: center;
+        border-top: 2px solid var(--ink);
+        background: var(--bg);
+      }
+
+      .footer-links {
+        display: flex;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-bottom: 14px;
+        font-weight: 700;
+        color: var(--ink);
+      }
+
+      .footer-links a {
+        padding: 8px 14px;
+        border-radius: 999px;
+        border: 2px solid var(--ink);
+        background: transparent;
+        transition: background 0.2s ease;
+      }
+
+      .footer-links a:hover {
+        background: var(--highlight);
+      }
+
+      .footer-copy {
+        font-weight: 700;
+        color: var(--ink);
+      }
+
+      @media (max-width: 720px) {
+        header {
+          grid-template-columns: 1fr;
+          justify-items: center;
+          text-align: center;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <div class="top-bar">
+        <div class="container">
+          <header>
+            <a class="logo-link" href="/home.html" aria-label="Gratly home">
+              <img src="/gratlylogodash.png" alt="Gratly" />
+            </a>
+            <nav class="nav-links">
+              <a class="nav-pill" href="/home.html">Home</a>
+              <a class="nav-pill" href="/pricing.html">Pricing</a>
+              <a class="nav-pill" href="/faqs.html">FAQs</a>
+              <a class="nav-pill" href="/about.html">About Us</a>
+              <a class="nav-pill" href="/contact.html">Get In Touch</a>
+            </nav>
+            <a class="nav-login" href="/login">Login</a>
+          </header>
+        </div>
+      </div>
+
+      <div class="container">
+        <section class="hero">
+          <h1>Questions, answered with clarity.</h1>
+          <p>
+            The most common things teams ask before moving tips into Gratly. If you need something
+            more specific, we are happy to help.
+          </p>
+        </section>
+
+        <section class="faq-grid">
+          <details class="faq-card">
+            <summary>How long does onboarding take?</summary>
+            <div class="faq-body">
+              Most locations are live in under a week with rosters and rules set in one session.
+            </div>
+          </details>
+          <details class="faq-card">
+            <summary>Can we customize tip rules?</summary>
+            <div class="faq-body">
+              Yes. Build role-based, shift-based, or pooled splits that match your service style.
+            </div>
+          </details>
+          <details class="faq-card">
+            <summary>Is Gratly employee-friendly?</summary>
+            <div class="faq-body">
+              Every team member sees transparent payouts and a clear audit trail for trust.
+            </div>
+          </details>
+          <details class="faq-card">
+            <summary>Does it work with multiple locations?</summary>
+            <div class="faq-body">
+              Absolutely. Manage multiple restaurants, roles, and schedules from one view.
+            </div>
+          </details>
+          <details class="faq-card">
+            <summary>What about support?</summary>
+            <div class="faq-body">
+              We offer priority support and onboarding help as you scale.
+            </div>
+          </details>
+          <details class="faq-card">
+            <summary>Can we connect payroll?</summary>
+            <div class="faq-body">
+              We support payroll exports today and integrations on request.
+            </div>
+          </details>
+        </section>
+
+        <section class="cta-band">
+          <div>
+            <strong>Still have questions?</strong>
+            <p style="margin: 6px 0 0; color: var(--muted)">
+              Send us a note and we will reply quickly.
+            </p>
+          </div>
+          <a class="btn-primary" href="#">Get in touch</a>
+        </section>
+
+        <section class="question-box">
+          <h3>Ask a question</h3>
+          <p style="margin: 0; color: var(--muted)">
+            Share your question and we will get back to you fast.
+          </p>
+          <form class="question-form" id="faq-question-form">
+            <div class="form-row">
+              <input type="text" name="name" placeholder="Your name" required />
+              <input type="email" name="email" placeholder="Your email" required />
+            </div>
+            <textarea name="question" placeholder="What would you like to ask?" required></textarea>
+            <div class="form-actions">
+              <button class="btn-primary" type="submit">Send question</button>
+              <span class="status" id="question-status"></span>
+            </div>
+          </form>
+        </section>
+      </div>
+
+      <footer>
+        <div class="footer-links">
+          <a href="/home.html">Home</a>
+          <a href="/pricing.html">Pricing</a>
+          <a href="/faqs.html">FAQs</a>
+          <a href="/about.html">About Us</a>
+          <a href="/contact.html">Get In Touch</a>
+          <a href="/login">Login</a>
+        </div>
+        <div class="footer-copy">© <span class="footer-year"></span> Gratly LLC. All Rights Reserved.</div>
+      </footer>
+    </div>
+    <script>
+      const form = document.getElementById("faq-question-form");
+      const statusEl = document.getElementById("question-status");
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        statusEl.textContent = "Sending...";
+        const formData = new FormData(form);
+        const payload = {
+          name: formData.get("name"),
+          email: formData.get("email"),
+          question: formData.get("question"),
+        };
+        try {
+          const apiBase = window.location.origin.includes("517")
+            ? "http://localhost:8000"
+            : "";
+          const response = await fetch(`${apiBase}/faq-question`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (!response.ok) {
+            throw new Error("Request failed");
+          }
+          form.reset();
+          statusEl.textContent = "Thanks! We will be in touch soon.";
+        } catch (error) {
+          statusEl.textContent = "Something went wrong. Please try again.";
+        }
+      });
+    </script>
+    <script>
+    (function () {
+      var yearEl = document.querySelector('.footer-year');
+      if (yearEl) {
+        yearEl.textContent = new Date().getFullYear();
+      }
+    })();
+  </script>
+</body>
+</html>

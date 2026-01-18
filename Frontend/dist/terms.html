@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gratly | Terms of Service</title>
+    <link rel="icon" type="image/png" href="/gratlyfavicon.png" />
+    <style>
+      :root {
+        --bg: #f4f2ee;
+        --ink: #111827;
+        --muted: #6b7280;
+        --accent: #cab99a;
+        --accent-dark: #bfa986;
+        --card: #ffffff;
+        --line: #e5e7eb;
+        --highlight: #e6d7b8;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+        color: var(--ink);
+        background: var(--bg);
+      }
+
+      a {
+        text-decoration: none;
+        color: inherit;
+      }
+
+      .page {
+        min-height: 100vh;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .page::before,
+      .page::after {
+        content: "";
+        position: absolute;
+        border-radius: 999px;
+        opacity: 0.7;
+        z-index: 0;
+      }
+
+      .page::before {
+        width: 520px;
+        height: 520px;
+        background: radial-gradient(circle at 30% 30%, #ffffff 0%, #efe7d8 55%, transparent 70%);
+        top: -200px;
+        right: -120px;
+      }
+
+      .page::after {
+        width: 520px;
+        height: 520px;
+        background: radial-gradient(circle at 70% 70%, #ffffff 0%, #eadfcf 50%, transparent 70%);
+        bottom: -220px;
+        left: -160px;
+      }
+
+      .container {
+        width: min(1200px, 92vw);
+        margin: 0 auto;
+        position: relative;
+        z-index: 1;
+      }
+
+      .top-bar {
+        border-bottom: 2px solid var(--ink);
+        background: rgba(255, 255, 255, 0.7);
+      }
+
+      .top-bar .container {
+        width: 100%;
+        max-width: none;
+        padding: 0 40px;
+      }
+
+      header {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        align-items: center;
+        gap: 20px;
+        padding: 18px 32px;
+      }
+
+      .nav-links {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      .logo-link img {
+        height: 52px;
+        width: auto;
+        display: block;
+      }
+
+      .logo-link {
+        margin-right: 12px;
+      }
+
+      .nav-pill {
+        padding: 8px 22px;
+        border-radius: 999px;
+        border: 2px solid var(--ink);
+        font-weight: 700;
+        font-size: 15px;
+        letter-spacing: 0.02em;
+        transition: all 0.2s ease;
+        background: transparent;
+      }
+
+      .nav-pill:hover {
+        background: var(--highlight);
+        color: var(--ink);
+      }
+
+      .nav-login {
+        padding: 8px 22px;
+        border-radius: 999px;
+        border: 2px solid var(--ink);
+        font-weight: 700;
+        font-size: 15px;
+        letter-spacing: 0.02em;
+        background: transparent;
+        transition: all 0.2s ease;
+      }
+
+      .nav-login:hover {
+        background: var(--highlight);
+        color: var(--ink);
+      }
+
+      .exit-button {
+        display: inline-flex;
+        align-items: center;
+        padding: 12px 18px;
+        border-radius: 12px;
+        border: 2px solid var(--ink);
+        font-weight: 700;
+        font-size: 14px;
+        letter-spacing: 0.02em;
+        background: #ffffff;
+        transition: all 0.2s ease;
+      }
+
+      .exit-button:hover {
+        background: var(--highlight);
+        transform: translateY(-1px);
+      }
+
+      .hero {
+        padding: 64px 0 24px;
+      }
+
+      .hero h1 {
+        font-size: clamp(2.4rem, 3.6vw, 3.4rem);
+        margin-bottom: 12px;
+        letter-spacing: -0.02em;
+      }
+
+      .hero p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .legal-card {
+        margin: 32px 0 80px;
+        background: var(--card);
+        border-radius: 24px;
+        border: 1px solid var(--line);
+        box-shadow: 0 18px 40px rgba(17, 24, 39, 0.08);
+        padding: clamp(24px, 4vw, 48px);
+      }
+
+      .legal-meta {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: #ffffff;
+        font-weight: 600;
+        font-size: 13px;
+        color: var(--muted);
+        margin-bottom: 24px;
+      }
+
+      .legal-section {
+        padding: 18px 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .legal-section:first-of-type {
+        border-top: none;
+        padding-top: 0;
+      }
+
+      .legal-section h2 {
+        font-size: 1.2rem;
+        margin: 0 0 8px;
+      }
+
+      .legal-section p {
+        margin: 0 0 10px;
+        color: #374151;
+        line-height: 1.7;
+      }
+
+      .legal-section ul {
+        margin: 0;
+        padding-left: 20px;
+        color: #374151;
+        line-height: 1.7;
+      }
+
+      .legal-section li {
+        margin-bottom: 6px;
+      }
+
+      .contact-card {
+        margin-top: 16px;
+        padding: 16px;
+        border-radius: 16px;
+        background: #f8f4ee;
+        border: 1px dashed #e2d6c2;
+        color: #374151;
+      }
+
+      @media (max-width: 900px) {
+        header {
+          grid-template-columns: 1fr;
+          justify-items: center;
+          text-align: center;
+        }
+
+        .logo-link {
+          margin-right: 0;
+        }
+
+        .nav-links {
+          justify-content: center;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <div class="top-bar">
+        <div class="container">
+          <header>
+            <a class="logo-link" href="/home.html" aria-label="Gratly home">
+              <img src="/gratlylogodash.png" alt="Gratly" />
+            </a>
+            <nav class="nav-links">
+              <a class="nav-pill" href="/home.html">Home</a>
+              <a class="nav-pill" href="/pricing.html">Pricing</a>
+              <a class="nav-pill" href="/faqs.html">FAQs</a>
+              <a class="nav-pill" href="/about.html">About Us</a>
+              <a class="nav-pill" href="/contact.html">Get In Touch</a>
+            </nav>
+            <a class="nav-login" href="/login">Login</a>
+          </header>
+        </div>
+      </div>
+
+      <div class="container">
+        <section class="hero">
+          <h1>Terms of Service</h1>
+          <p>
+            These Terms of Service govern access to and use of the Gratly website, applications, and services.
+            Please read them carefully.
+          </p>
+          <a class="exit-button" href="/login">Exit to Login</a>
+        </section>
+
+        <section class="legal-card">
+          <div class="legal-meta">Effective Date: [Month Day, Year]</div>
+
+          <div class="legal-section">
+            <h2>1. Who Can Use the Services</h2>
+            <p>
+              You must be at least 18 years old and able to form a binding contract to use the Services. If you use the
+              Services on behalf of a restaurant or business (a "Customer"), you represent that you have authority to
+              bind that Customer.
+            </p>
+          </div>
+
+          <div class="legal-section">
+            <h2>2. The Services</h2>
+            <p>
+              Gratly provides tools to manage tip pooling, shift payouts, approvals, reporting, and related hospitality
+              operations, including integrations with payment processing providers such as Stripe.
+            </p>
+          </div>
+
+          <div class="legal-section">
+            <h2>3. Accounts and Access</h2>
+            <p>
+              You must provide accurate, complete information and keep it current. You are responsible for all activity
+              under your account, including maintaining confidentiality of login credentials. Notify us immediately of
+              any unauthorized access.
+            </p>
+          </div>
+
+          <div class="legal-section">
+            <h2>4. Customer Responsibilities</h2>
+            <p>Customers are responsible for:</p>
+            <ul>
+              <li>Compliance with all applicable wage, tip, tax, and labor laws.</li>
+              <li>Ensuring payout rules and approvals are accurate and authorized.</li>
+              <li>Obtaining all necessary consents from employees and stakeholders.</li>
+            </ul>
+            <p>Gratly does not provide legal, payroll, tax, or financial advice.</p>
+          </div>
+
+          <div class="legal-section">
+            <h2>5. Fees and Payment</h2>
+            <p>
+              If the Services are subject to fees, pricing and billing terms will be described in an order form,
+              subscription page, or other written agreement. You authorize us or our payment processors to charge
+              applicable fees.
+            </p>
+          </div>
+
+          <div class="legal-section">
+            <h2>6. Payouts and Payment Processing</h2>
+            <p>
+              Payouts and transfers may be processed through Stripe or other third-party processors. Your use of payment
+              features is subject to those providers' terms. We do not store full bank account details; payment processors
+              handle sensitive financial data.
+            </p>
+          </div>
+
+          <div class="legal-section">
+            <h2>7. Acceptable Use</h2>
+            <p>You agree not to:</p>
+            <ul>
+              <li>Use the Services for unlawful or fraudulent purposes.</li>
+              <li>Attempt to access or disrupt systems or data not intended for you.</li>
+              <li>Upload or transmit malicious code.</li>
+              <li>Misrepresent payout data or employee information.</li>
+            </ul>
+          </div>
+
+          <div class="legal-section">
+            <h2>8. Intellectual Property</h2>
+            <p>
+              Gratly and its licensors own all rights, title, and interest in the Services, including software, content,
+              and trademarks. You receive a limited, non-exclusive, non-transferable right to use the Services during
+              your subscription.
+            </p>
+          </div>
+
+          <div class="legal-section">
+            <h2>9. Confidentiality</h2>
+            <p>
+              Each party agrees to protect the other's non-public information disclosed in connection with the Services,
+              and to use it only as necessary to perform under these Terms.
+            </p>
+          </div>
+
+          <div class="legal-section">
+            <h2>10. Termination</h2>
+            <p>
+              We may suspend or terminate access if you violate these Terms, fail to pay fees, or if required by law. You
+              may stop using the Services at any time. Termination does not relieve payment obligations incurred before
+              termination.
+            </p>
+          </div>
+
+          <div class="legal-section">
+            <h2>11. Disclaimers</h2>
+            <p>
+              The Services are provided "as is" and "as available." Gratly disclaims all warranties, express or implied,
+              including warranties of merchantability, fitness for a particular purpose, and non-infringement. We do not
+              guarantee uninterrupted or error-free operation.
+            </p>
+          </div>
+
+          <div class="legal-section">
+            <h2>12. Limitation of Liability</h2>
+            <p>
+              To the maximum extent permitted by law, Gratly will not be liable for indirect, incidental, special,
+              consequential, or punitive damages, or loss of profits, data, or goodwill. Gratly's total liability for any
+              claim relating to the Services will not exceed the amount paid by you to Gratly in the 12 months before the
+              claim.
+            </p>
+          </div>
+
+          <div class="legal-section">
+            <h2>13. Indemnification</h2>
+            <p>
+              You agree to indemnify and hold Gratly harmless from claims, damages, liabilities, and expenses arising from
+              your use of the Services or violation of these Terms.
+            </p>
+          </div>
+
+          <div class="legal-section">
+            <h2>14. Changes to the Terms</h2>
+            <p>
+              We may update these Terms from time to time. If we make material changes, we will provide notice. Continued
+              use of the Services after changes become effective constitutes acceptance.
+            </p>
+          </div>
+
+          <div class="legal-section">
+            <h2>15. Governing Law</h2>
+            <p>These Terms are governed by the laws of [State/Country], without regard to conflict-of-law principles.</p>
+          </div>
+
+          <div class="legal-section">
+            <h2>16. Contact</h2>
+            <div class="contact-card">
+              <p>[Legal Entity Name]</p>
+              <p>[Address]</p>
+              <p>[Email]</p>
+              <p>[Phone]</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </body>
+</html>

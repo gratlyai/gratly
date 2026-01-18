@@ -1989,16 +1989,9 @@ export default function Reconciliation() {
                                     const saveScheduleId = currentSchedule.payoutScheduleId;
                                     const saveBusinessDate = currentSchedule.businessDate;
 
-                                    console.log("DEBUG: Built payload synchronously:", {
-                                      itemCount: savePayloadItems.length,
-                                      scheduleId: saveScheduleId,
-                                      businessDate: saveBusinessDate,
-                                    });
-                                    setSchedules((current) => {
-                                      console.log("DEBUG inside setSchedules, current count:", current.length);
-                                      return current.map((scheduleItem) => {
+                                    setSchedules((current) =>
+                                      current.map((scheduleItem) => {
                                         const itemKey = `${scheduleItem.payoutScheduleId}-${scheduleItem.businessDate}`;
-                                        console.log("DEBUG comparing:", { itemKey, scheduleKey, matches: itemKey === scheduleKey });
                                         if (itemKey !== scheduleKey) {
                                           return scheduleItem;
                                         }
@@ -2265,17 +2258,11 @@ export default function Reconciliation() {
                                           ...normalizedSchedule,
                                           contributors: recalculatedContributors,
                                         };
-                                      });
-                                    });
+                                      }),
+                                    );
 
                                     // Perform the save using synchronously built payload
                                     if (savePayloadItems && saveScheduleId && saveBusinessDate && userId !== null) {
-                                      console.log("Saving approval overrides:", {
-                                        restaurantId,
-                                        payoutScheduleId: saveScheduleId,
-                                        businessDate: saveBusinessDate,
-                                        itemCount: savePayloadItems.length,
-                                      });
                                       const saveResult = await saveApprovalOverrides({
                                         restaurantId,
                                         payoutScheduleId: saveScheduleId,
@@ -2288,9 +2275,6 @@ export default function Reconciliation() {
                                         setValidationError(`Failed to save changes: ${saveResult.error}`);
                                         return;
                                       }
-                                      console.log("Save successful");
-                                    } else {
-                                      console.log("Save skipped - missing required data");
                                     }
 
                                     setEditingScheduleKey(null);
