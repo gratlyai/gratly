@@ -97,6 +97,12 @@ export default function Reconciliation() {
   const [addMemberSlots, setAddMemberSlots] = useState<Record<string, string[]>>({});
   const [payoutEdits, setPayoutEdits] = useState<Record<string, string>>({});
   const [netEdits, setNetEdits] = useState<Record<string, string>>({});
+  const [removedEmployees, setRemovedEmployees] = useState<Set<string>>(new Set());
+  const [removeConfirmation, setRemoveConfirmation] = useState<{
+    employeeKey: string;
+    employeeName: string;
+    scheduleKey: string;
+  } | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [approvedScheduleKeys, setApprovedScheduleKeys] = useState<Set<string>>(new Set());
@@ -269,7 +275,7 @@ export default function Reconciliation() {
   const normalizeRoleKey = (value: string | null | undefined) =>
     (value || "").trim().toLowerCase();
 
-  const buildApprovalItems = (schedule: ApprovalScheduleWithContributors) => {
+  const buildApprovalItems = (schedule: ApprovalScheduleWithContributors, originalPrepayoutTotal?: number) => {
     const receivers = schedule.contributors.filter(
       (contributor) => (contributor.isContributor || "").toLowerCase() === "no",
     );
@@ -327,11 +333,14 @@ export default function Reconciliation() {
     const totalReceiverPercentage = receiverPercentages.reduce((sum, r) => sum + r.percentage, 0);
 
     // Get the original total prepayout from the schedule
-    // We need to find the original prepayout total - sum from existing employees OR from schedule metadata
-    const existingPrepayoutTotal = schedule.contributors.reduce(
-      (sum, c) => sum + (c.prepayoutDeduction || 0),
-      0
-    );
+    // If originalPrepayoutTotal is provided (when employees are removed), use that
+    // Otherwise sum from existing employees
+    const existingPrepayoutTotal = originalPrepayoutTotal !== undefined
+      ? originalPrepayoutTotal
+      : schedule.contributors.reduce(
+          (sum, c) => sum + (c.prepayoutDeduction || 0),
+          0
+        );
     // If no existing prepayout data, check if there's a contributionPool we can derive from
     const originalFeePerPerson = schedule.contributors.find((c) => (c.payoutFee || 0) > 0)?.payoutFee || 0;
 
@@ -417,11 +426,13 @@ export default function Reconciliation() {
 
         // Calculate net payout with deductions
         // If item already has an edited netPayout, use that instead of recalculating
+        // EXCEPT when employees are removed (originalPrepayoutTotal provided) - then recalculate for contributors
         const grossPayout =
           Number(item.totalTips || 0) + Number(item.totalGratuity || 0) + payoutAmount;
         const calculatedNetPayout = Math.max(0, grossPayout - prepayoutDeduction - payoutFee);
-        // Use the existing netPayout if it was edited (differs from calculated), otherwise use calculated
-        const netPayout = item.netPayout !== undefined ? item.netPayout : calculatedNetPayout;
+        // Force recalculation for contributors when employees are removed (receiver % changed)
+        const shouldRecalculate = isContributor && originalPrepayoutTotal !== undefined;
+        const netPayout = (!shouldRecalculate && item.netPayout !== undefined) ? item.netPayout : calculatedNetPayout;
 
         return {
           employeeGuid: item.employeeGuid,
@@ -429,7 +440,7 @@ export default function Reconciliation() {
           jobTitle: item.jobTitle,
           isContributor: item.isContributor,
           payoutReceiverId: item.payoutReceiverId,
-          payoutPercentage: isContributor ? item.payoutPercentage : receiverPayoutPercentage,
+          payoutPercentage: isContributor ? totalReceiverPercentage : receiverPayoutPercentage,
           totalSales: item.totalSales,
           netSales: item.netSales,
           totalTips: item.totalTips,
@@ -598,6 +609,47 @@ export default function Reconciliation() {
                 className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-md transition hover:bg-red-700"
               >
                 OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Remove Employee Confirmation Popup */}
+      {removeConfirmation && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="mx-4 max-w-md rounded-lg bg-white p-6 shadow-xl">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-amber-100">
+                <svg className="h-6 w-6 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <h3 className="text-lg font-semibold text-gray-900">Remove Employee</h3>
+            </div>
+            <p className="mb-6 text-sm text-gray-600">
+              Are you sure you want to remove <span className="font-semibold">{removeConfirmation.employeeName}</span> from this shift payout? This action will take effect when you click Save.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setRemoveConfirmation(null)}
+                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm transition hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setRemovedEmployees((current) => {
+                    const next = new Set(current);
+                    next.add(removeConfirmation.employeeKey);
+                    return next;
+                  });
+                  setRemoveConfirmation(null);
+                }}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-md transition hover:bg-red-700"
+              >
+                Remove
               </button>
             </div>
           </div>
@@ -967,8 +1019,13 @@ export default function Reconciliation() {
                       <div className="text-sm text-gray-500">No contributors assigned.</div>
                     ) : (
                       (() => {
+                        // Filter out removed employees when in edit mode
+                        const isRemovedEmployee = (contributor: ApprovalContributor) => {
+                          const empKey = `${scheduleKey}-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`;
+                          return editingScheduleKey === scheduleKey && removedEmployees.has(empKey);
+                        };
                         const contributors = schedule.contributors
-                          .filter((contributor) => contributor.isContributor === "Yes")
+                          .filter((contributor) => contributor.isContributor === "Yes" && !isRemovedEmployee(contributor))
                           .slice()
                           .sort((a, b) => {
                             const firstA = (a.employeeName || "").trim().split(/\s+/)[0] || "";
@@ -976,7 +1033,7 @@ export default function Reconciliation() {
                             return firstA.localeCompare(firstB, undefined, { sensitivity: "base" });
                           });
                         const receivers = schedule.contributors
-                          .filter((contributor) => contributor.isContributor === "No")
+                          .filter((contributor) => contributor.isContributor === "No" && !isRemovedEmployee(contributor))
                           .slice()
                           .sort((a, b) =>
                             (a.jobTitle || "").localeCompare(b.jobTitle || "", undefined, {
@@ -996,7 +1053,12 @@ export default function Reconciliation() {
                           acc[roleKey] = Number(role.payoutPercentage || 0);
                           return acc;
                         }, {} as Record<string, number>);
-                        const totalReceiverPercentage = getReceiverPercentSum(schedule);
+                        // Create filtered schedule for percentage calculation (excludes removed employees)
+                        const filteredScheduleForCalc = {
+                          ...schedule,
+                          contributors: schedule.contributors.filter((c) => !isRemovedEmployee(c)),
+                        };
+                        const totalReceiverPercentage = getReceiverPercentSum(filteredScheduleForCalc);
                         const { overallTips: scheduleOverallTips, overallGratuity: scheduleOverallGratuity } =
                           getOverallBase(schedule);
                         const missingRoles = getMissingRoles(schedule);
@@ -1477,15 +1539,37 @@ export default function Reconciliation() {
                                                       <div className="mt-1 flex gap-4 text-sm">
                                                         {contributor.prepayoutDeduction ? (
                                                           <span>
-                                                            Prepayout: <span className="text-amber-600">-{formatCurrency(contributor.prepayoutDeduction)}</span>
+                                                            Prepayout: <span className="text-red-600">({formatCurrency(contributor.prepayoutDeduction)})</span>
                                                           </span>
                                                         ) : null}
                                                         {contributor.payoutFee ? (
                                                           <span>
-                                                            Transfer Fee: <span className="text-amber-600">-{formatCurrency(contributor.payoutFee)}</span>
+                                                            Transfer Fee: <span className="text-red-600">({formatCurrency(contributor.payoutFee)})</span>
                                                           </span>
                                                         ) : null}
                                                       </div>
+                                                    </div>
+                                                  )}
+                                                  {/* Remove Employee Button (in Edit mode) */}
+                                                  {editingScheduleKey === scheduleKey && (
+                                                    <div className="sm:col-span-2 lg:col-span-4 flex justify-end">
+                                                      <button
+                                                        type="button"
+                                                        onClick={(event) => {
+                                                          event.stopPropagation();
+                                                          setRemoveConfirmation({
+                                                            employeeKey,
+                                                            employeeName: contributor.employeeName ?? "Unknown",
+                                                            scheduleKey,
+                                                          });
+                                                        }}
+                                                        className="inline-flex items-center gap-1.5 rounded-lg border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-600 shadow-sm transition hover:bg-red-50 hover:border-red-400"
+                                                      >
+                                                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                                        </svg>
+                                                        Remove
+                                                      </button>
                                                     </div>
                                                   )}
                                                 </div>
@@ -1936,9 +2020,28 @@ export default function Reconciliation() {
                                       return;
                                     }
 
+                                    // Calculate original prepayout total from ALL employees BEFORE filtering
+                                    const originalPrepayoutTotal = currentSchedule.contributors.reduce(
+                                      (sum, c) => sum + (c.prepayoutDeduction || 0),
+                                      0
+                                    );
+
+                                    // Collect removed employees for this schedule
+                                    const removedForThisSchedule = currentSchedule.contributors.filter((c) => {
+                                      const empKey = `${scheduleKey}-${c.employeeGuid}-${c.jobTitle ?? "role"}`;
+                                      return removedEmployees.has(empKey);
+                                    });
+
+                                    // Filter out removed employees from the schedule
+                                    const remainingContributors = currentSchedule.contributors.filter((c) => {
+                                      const empKey = `${scheduleKey}-${c.employeeGuid}-${c.jobTitle ?? "role"}`;
+                                      return !removedEmployees.has(empKey);
+                                    });
+
                                     // Build the normalized schedule with all edits applied (same logic as inside setSchedules)
-                                    const { overallTips: baseOverallTips, overallGratuity: baseOverallGratuity } = getOverallBase(currentSchedule);
-                                    const preUpdatedContributors = currentSchedule.contributors.map((contributor) => {
+                                    const scheduleWithRemovals = { ...currentSchedule, contributors: remainingContributors };
+                                    const { overallTips: baseOverallTips, overallGratuity: baseOverallGratuity } = getOverallBase(scheduleWithRemovals);
+                                    const preUpdatedContributors = remainingContributors.map((contributor) => {
                                       const isContributor = contributor.isContributor !== "No";
                                       const netKey = `${scheduleKey}-net-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`;
                                       const payoutKey = `${scheduleKey}-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`;
@@ -1979,13 +2082,97 @@ export default function Reconciliation() {
                                       return contributor;
                                     });
 
+                                    // Add new employees from addMemberSelections and customReceivers
+                                    const existingKeys = new Set(
+                                      preUpdatedContributors.map(
+                                        (c) => `${c.employeeGuid}-${c.jobTitle ?? ""}-${c.isContributor}`,
+                                      ),
+                                    );
+                                    const newMemberEntries: ApprovalContributor[] = [];
+                                    // Add from addMemberSelections (role-based additions)
+                                    currentSchedule.receiverRoles.forEach((role) => {
+                                      const roleKey = `${scheduleKey}-role-${role.receiverId ?? "role"}`;
+                                      const selections = addMemberSelections[roleKey];
+                                      if (!selections) return;
+                                      Object.entries(selections).forEach(([slotId, selection]) => {
+                                        if (!selection) return;
+                                        const entryKey = `${selection.id}-${role.receiverId ?? ""}-No`;
+                                        if (existingKeys.has(entryKey)) return;
+                                        existingKeys.add(entryKey);
+                                        const editedValue = payoutEdits[`${roleKey}-${slotId}`];
+                                        const parsed = editedValue ? parsePercentage(editedValue) : null;
+                                        const payoutPercentage = parsed ?? role.payoutPercentage ?? 0;
+                                        const payoutTips = roundCurrency((payoutPercentage / 100) * baseOverallTips);
+                                        const payoutGratuity = roundCurrency((payoutPercentage / 100) * baseOverallGratuity);
+                                        newMemberEntries.push({
+                                          employeeGuid: selection.id,
+                                          employeeName: selection.name,
+                                          jobTitle: role.receiverId ?? null,
+                                          businessDate: currentSchedule.businessDate,
+                                          inTime: null,
+                                          outTime: null,
+                                          hoursWorked: 0,
+                                          isContributor: "No",
+                                          payoutReceiverId: role.receiverId ?? null,
+                                          payoutPercentage,
+                                          totalSales: 0,
+                                          netSales: 0,
+                                          totalTips: 0,
+                                          totalGratuity: 0,
+                                          overallTips: baseOverallTips,
+                                          overallGratuity: baseOverallGratuity,
+                                          payoutTips,
+                                          payoutGratuity,
+                                        });
+                                      });
+                                    });
+                                    // Add from customReceivers (manually entered receivers)
+                                    (customReceivers[scheduleKey] ?? []).forEach((entry) => {
+                                      const name = entry.employeeName.trim();
+                                      const jobTitle = entry.jobTitle.trim();
+                                      if (!name || !jobTitle) return;
+                                      const parsed = entry.payoutPercentage ? parsePercentage(entry.payoutPercentage) : null;
+                                      if (parsed === null) return;
+                                      const fallbackGuid = entry.employeeGuid ?? `custom-${entry.id}`;
+                                      const entryKey = `${fallbackGuid}-${jobTitle}-No`;
+                                      if (existingKeys.has(entryKey)) return;
+                                      existingKeys.add(entryKey);
+                                      const payoutTips = roundCurrency((parsed / 100) * baseOverallTips);
+                                      const payoutGratuity = roundCurrency((parsed / 100) * baseOverallGratuity);
+                                      newMemberEntries.push({
+                                        employeeGuid: fallbackGuid,
+                                        employeeName: name,
+                                        jobTitle,
+                                        businessDate: currentSchedule.businessDate,
+                                        inTime: null,
+                                        outTime: null,
+                                        hoursWorked: 0,
+                                        isContributor: "No",
+                                        payoutReceiverId: jobTitle,
+                                        payoutPercentage: parsed,
+                                        totalSales: 0,
+                                        netSales: 0,
+                                        totalTips: 0,
+                                        totalGratuity: 0,
+                                        overallTips: baseOverallTips,
+                                        overallGratuity: baseOverallGratuity,
+                                        payoutTips,
+                                        payoutGratuity,
+                                      });
+                                    });
+
                                     const preNormalizedSchedule = {
-                                      ...currentSchedule,
-                                      contributors: preUpdatedContributors,
+                                      ...scheduleWithRemovals,
+                                      contributors: [...preUpdatedContributors, ...newMemberEntries],
                                     };
 
                                     // Build payload items SYNCHRONOUSLY before setSchedules
-                                    const savePayloadItems = buildApprovalItems(preNormalizedSchedule);
+                                    // Pass originalPrepayoutTotal when employees are added or removed so values are recalculated
+                                    const hasEmployeeChanges = removedForThisSchedule.length > 0 || newMemberEntries.length > 0;
+                                    const savePayloadItems = buildApprovalItems(
+                                      preNormalizedSchedule,
+                                      hasEmployeeChanges ? originalPrepayoutTotal : undefined
+                                    );
                                     const saveScheduleId = currentSchedule.payoutScheduleId;
                                     const saveBusinessDate = currentSchedule.businessDate;
 
@@ -1995,8 +2182,14 @@ export default function Reconciliation() {
                                         if (itemKey !== scheduleKey) {
                                           return scheduleItem;
                                         }
-                                        const { overallTips, overallGratuity } = getOverallBase(scheduleItem);
-                                        const updatedContributors = scheduleItem.contributors.map((contributor) => {
+                                        // Filter out removed employees from this schedule
+                                        const filteredContributors = scheduleItem.contributors.filter((c) => {
+                                          const empKey = `${scheduleKey}-${c.employeeGuid}-${c.jobTitle ?? "role"}`;
+                                          return !removedEmployees.has(empKey);
+                                        });
+                                        const filteredSchedule = { ...scheduleItem, contributors: filteredContributors };
+                                        const { overallTips, overallGratuity } = getOverallBase(filteredSchedule);
+                                        const updatedContributors = filteredContributors.map((contributor) => {
                                           const isContributor = contributor.isContributor !== "No";
                                           const netKey = `${scheduleKey}-net-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`;
                                           const payoutKey = `${scheduleKey}-${contributor.employeeGuid}-${contributor.jobTitle ?? "role"}`;
@@ -2232,7 +2425,12 @@ export default function Reconciliation() {
                                           receiverCount: nextReceiverCount,
                                         };
                                         // Calculate the final values with proper deductions
-                                        const payloadItems = buildApprovalItems(normalizedSchedule);
+                                        // Pass originalPrepayoutTotal when employees are added or removed so values are recalculated
+                                        const hasEmployeeChangesInCallback = removedForThisSchedule.length > 0 || newEntries.length > 0 || customReceiverEntries.length > 0;
+                                        const payloadItems = buildApprovalItems(
+                                          normalizedSchedule,
+                                          hasEmployeeChangesInCallback ? originalPrepayoutTotal : undefined
+                                        );
                                         // Update contributors with recalculated values from buildApprovalItems
                                         const recalculatedContributors = payloadItems.map((item) => {
                                           // Find matching original contributor to preserve extra fields
@@ -2263,12 +2461,20 @@ export default function Reconciliation() {
 
                                     // Perform the save using synchronously built payload
                                     if (savePayloadItems && saveScheduleId && saveBusinessDate && userId !== null) {
+                                      // Build removed employees payload
+                                      const removedEmployeesPayload = removedForThisSchedule.map((c) => ({
+                                        employeeGuid: c.employeeGuid,
+                                        employeeName: c.employeeName,
+                                        jobTitle: c.jobTitle,
+                                      }));
+
                                       const saveResult = await saveApprovalOverrides({
                                         restaurantId,
                                         payoutScheduleId: saveScheduleId,
                                         businessDate: saveBusinessDate,
                                         userId,
                                         items: savePayloadItems,
+                                        removedEmployees: removedEmployeesPayload.length > 0 ? removedEmployeesPayload : undefined,
                                       });
                                       if (!saveResult.success) {
                                         console.error("Failed to save:", saveResult.error);
@@ -2289,6 +2495,7 @@ export default function Reconciliation() {
                                       [scheduleKey]: [],
                                     }));
                                     setCustomReceiverDropdowns({});
+                                    setRemovedEmployees(new Set());
                                   }}
                                   className="rounded-lg bg-[#cab99a] px-4 py-2 text-sm font-semibold text-black shadow-md transition hover:bg-[#bfa986] hover:shadow-lg"
                                 >
@@ -2312,6 +2519,7 @@ export default function Reconciliation() {
                                       [scheduleKey]: [],
                                     }));
                                     setCustomReceiverDropdowns({});
+                                    setRemovedEmployees(new Set());
                                     requestAnimationFrame(() => {
                                       const target = scheduleRefs.current[scheduleKey];
                                       if (target) {

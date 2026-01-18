@@ -81,12 +81,19 @@ export type ApprovalOverrideItemPayload = {
   payoutFee?: number;
 };
 
+export type RemovedEmployeePayload = {
+  employeeGuid: string | null;
+  employeeName: string | null;
+  jobTitle: string | null;
+};
+
 export type ApprovalOverridePayload = {
   restaurantId: number;
   payoutScheduleId: number;
   businessDate: string;
   userId: number;
   items: ApprovalOverrideItemPayload[];
+  removedEmployees?: RemovedEmployeePayload[];
 };
 
 export type ApprovalFinalizePayload = {
