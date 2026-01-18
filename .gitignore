@@ -1,5 +1,8 @@
 Backend/.env
-Backend/.env
+
+# Frontend build output
+Frontend/dist/
+
 # Lambda build artifact
 DB/getalldata_lambda.zip
 .DS_Store
