@@ -3,6 +3,7 @@ import { Navigate, Routes, Route, useParams, useLocation, useNavigate } from "re
 import GratlyLogin from "./GratlyLogin";
 import GratlySignUp from "./GratlySignUp";
 import GratlyHome from "./GratlyHome";
+import ChatPage from "./components/chat/ChatPage";
 import Employees from "./pages/Employees";
 import EmployeeProfile from "./pages/EmployeeProfile";
 import Reports from "./pages/Reports";
@@ -198,6 +199,12 @@ export default function App() {
           }
         />
         <Route path="profile" element={<GratlyProfile />} />
+        <Route
+          path="assistant"
+          element={
+            <ChatPage userId={Number(localStorage.getItem("userId") || "0")} />
+          }
+        />
       </Route>
 
       {/* Legacy redirects for backward compatibility */}

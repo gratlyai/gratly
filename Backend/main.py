@@ -62,6 +62,7 @@ if __package__:
     from .billing import router as billing_router
     from .moov_local import router as moov_local_router
     from .scheduler import init_scheduler, shutdown_scheduler
+    from GratlyAIAgent.router import router as agent_router
 else:
     from security import hash_password, verify_password
     from email_utils import send_sendgrid_email
@@ -94,6 +95,9 @@ else:
     from billing import router as billing_router
     from moov_local import router as moov_local_router
     from scheduler import init_scheduler, shutdown_scheduler
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from GratlyAIAgent.router import router as agent_router
 
 app = FastAPI()
 
@@ -425,6 +429,7 @@ app.include_router(moov_payments_router)
 app.include_router(payment_routing_router)
 app.include_router(billing_router)
 app.include_router(moov_local_router)
+app.include_router(agent_router)
 
 print("DB HOST:", _get_env_or_ini("DB_HOST"))
 print("DB USER:", _get_env_or_ini("DB_USER"))
