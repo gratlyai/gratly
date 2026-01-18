@@ -275,7 +275,83 @@ export default function Reconciliation() {
   const normalizeRoleKey = (value: string | null | undefined) =>
     (value || "").trim().toLowerCase();
 
+  // Build approval items for Equal Payout (Rule 2)
+  // For Equal Payout, all employees get an equal share of tips & gratuity
+  const buildEqualPayoutItems = (
+    schedule: ApprovalScheduleWithContributors,
+    overallTips: number,
+    overallGratuity: number,
+    originalPrepayoutTotal?: number
+  ) => {
+    const totalEmployees = schedule.contributors.length;
+    if (totalEmployees === 0) {
+      return [];
+    }
+
+    // Calculate equal share for each employee
+    const payoutPercentagePerEmployee = roundCurrency(100 / totalEmployees);
+    const payoutTipsPerEmployee = roundCurrency(overallTips / totalEmployees);
+    const payoutGratuityPerEmployee = roundCurrency(overallGratuity / totalEmployees);
+    const payoutAmountPerEmployee = payoutTipsPerEmployee + payoutGratuityPerEmployee;
+
+    // Get the original total prepayout from the schedule
+    const existingPrepayoutTotal = originalPrepayoutTotal !== undefined
+      ? originalPrepayoutTotal
+      : schedule.contributors.reduce(
+          (sum, c) => sum + (c.prepayoutDeduction || 0),
+          0
+        );
+    const originalFeePerPerson = schedule.contributors.find((c) => (c.payoutFee || 0) > 0)?.payoutFee || 0;
+
+    // Recalculate prepayout per person based on total employees
+    const prepayoutPerPerson =
+      totalEmployees > 0 && existingPrepayoutTotal > 0
+        ? roundCurrency(existingPrepayoutTotal / totalEmployees)
+        : 0;
+
+    // Build items for each employee
+    return schedule.contributors.map((item) => {
+      const hasEarnings = payoutAmountPerEmployee > 0;
+      const prepayoutDeduction = hasEarnings ? prepayoutPerPerson : 0;
+      const payoutFee = hasEarnings ? originalFeePerPerson : 0;
+
+      // Calculate net payout
+      const calculatedNetPayout = Math.max(0, payoutAmountPerEmployee - prepayoutDeduction - payoutFee);
+      // Use edited netPayout if available and no employee changes, otherwise recalculate
+      const netPayout = (originalPrepayoutTotal === undefined && item.netPayout !== undefined)
+        ? item.netPayout
+        : calculatedNetPayout;
+
+      return {
+        employeeGuid: item.employeeGuid,
+        employeeName: item.employeeName,
+        jobTitle: item.jobTitle,
+        isContributor: item.isContributor,
+        payoutReceiverId: item.payoutReceiverId,
+        payoutPercentage: payoutPercentagePerEmployee,
+        totalSales: item.totalSales,
+        netSales: item.netSales,
+        totalTips: item.totalTips,
+        totalGratuity: item.totalGratuity,
+        overallTips,
+        overallGratuity,
+        payoutTips: payoutTipsPerEmployee,
+        payoutGratuity: payoutGratuityPerEmployee,
+        netPayout,
+        prepayoutDeduction,
+        payoutFee,
+      };
+    });
+  };
+
   const buildApprovalItems = (schedule: ApprovalScheduleWithContributors, originalPrepayoutTotal?: number) => {
+    const { overallTips, overallGratuity } = getOverallBase(schedule);
+
+    // Handle Equal Payout (Rule 2) separately
+    if (schedule.payoutRuleId === "2") {
+      return buildEqualPayoutItems(schedule, overallTips, overallGratuity, originalPrepayoutTotal);
+    }
+
     const receivers = schedule.contributors.filter(
       (contributor) => (contributor.isContributor || "").toLowerCase() === "no",
     );
@@ -300,8 +376,6 @@ export default function Reconciliation() {
       acc[roleKey] = (acc[roleKey] ?? 0) + 1;
       return acc;
     }, {} as Record<string, number>);
-
-    const { overallTips, overallGratuity } = getOverallBase(schedule);
 
     // Calculate each receiver's effective percentage
     const receiverPercentages: { receiver: ApprovalContributor; percentage: number }[] = [];
@@ -1762,7 +1836,9 @@ export default function Reconciliation() {
                                           </div>
                                           {customEntries.length === 0 ? (
                                             <p className="mt-3 text-sm text-gray-500">
-                                              Add a person, select a job title, and enter a payout percentage.
+                                              {schedule.payoutRuleId === "2"
+                                                ? "Add a person and select a job title. Percentage is auto-calculated for Equal Payout."
+                                                : "Add a person, select a job title, and enter a payout percentage."}
                                             </p>
                                           ) : (
                                             customEntries.map((entry) => {
@@ -1927,16 +2003,25 @@ export default function Reconciliation() {
                                                   </label>
                                                   <label className="text-xs font-semibold uppercase tracking-wide text-gray-500">
                                                     Payout percentage
-                                                    <input
-                                                      value={entry.payoutPercentage}
-                                                      onChange={(event) =>
-                                                        updateCustomReceiver(scheduleKey, entry.id, {
-                                                          payoutPercentage: event.target.value,
-                                                        })
-                                                      }
-                                                      placeholder="0.00%"
-                                                      className="mt-2 w-[140px] rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700"
-                                                    />
+                                                    {schedule.payoutRuleId === "2" ? (
+                                                      <input
+                                                        value={`${roundCurrency(100 / (schedule.contributors.length + (customReceivers[scheduleKey]?.length || 0))).toFixed(2)}%`}
+                                                        disabled
+                                                        className="mt-2 w-[140px] rounded-lg border border-gray-200 bg-gray-100 px-3 py-2 text-sm text-gray-500 cursor-not-allowed"
+                                                        title="Equal Payout: percentage is auto-calculated"
+                                                      />
+                                                    ) : (
+                                                      <input
+                                                        value={entry.payoutPercentage}
+                                                        onChange={(event) =>
+                                                          updateCustomReceiver(scheduleKey, entry.id, {
+                                                            payoutPercentage: event.target.value,
+                                                          })
+                                                        }
+                                                        placeholder="0.00%"
+                                                        className="mt-2 w-[140px] rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700"
+                                                      />
+                                                    )}
                                                   </label>
                                                   <div className="flex justify-end">
                                                     <button
@@ -2132,13 +2217,18 @@ export default function Reconciliation() {
                                       const jobTitle = entry.jobTitle.trim();
                                       if (!name || !jobTitle) return;
                                       const parsed = entry.payoutPercentage ? parsePercentage(entry.payoutPercentage) : null;
-                                      if (parsed === null) return;
+                                      // For Equal Payout (Rule 2), percentage will be auto-calculated by buildEqualPayoutItems
+                                      // so we don't require it to be entered
+                                      const isEqualPayout = currentSchedule.payoutRuleId === "2";
+                                      if (!isEqualPayout && parsed === null) return;
                                       const fallbackGuid = entry.employeeGuid ?? `custom-${entry.id}`;
                                       const entryKey = `${fallbackGuid}-${jobTitle}-No`;
                                       if (existingKeys.has(entryKey)) return;
                                       existingKeys.add(entryKey);
-                                      const payoutTips = roundCurrency((parsed / 100) * baseOverallTips);
-                                      const payoutGratuity = roundCurrency((parsed / 100) * baseOverallGratuity);
+                                      // For Equal Payout, use 0 as placeholder - buildEqualPayoutItems will recalculate
+                                      const effectivePct = isEqualPayout ? 0 : (parsed ?? 0);
+                                      const payoutTips = roundCurrency((effectivePct / 100) * baseOverallTips);
+                                      const payoutGratuity = roundCurrency((effectivePct / 100) * baseOverallGratuity);
                                       newMemberEntries.push({
                                         employeeGuid: fallbackGuid,
                                         employeeName: name,
@@ -2149,7 +2239,7 @@ export default function Reconciliation() {
                                         hoursWorked: 0,
                                         isContributor: "No",
                                         payoutReceiverId: jobTitle,
-                                        payoutPercentage: parsed,
+                                        payoutPercentage: effectivePct,
                                         totalSales: 0,
                                         netSales: 0,
                                         totalTips: 0,
@@ -2278,7 +2368,10 @@ export default function Reconciliation() {
                                             const parsed = entry.payoutPercentage
                                               ? parsePercentage(entry.payoutPercentage)
                                               : null;
-                                            if (parsed === null) {
+                                            // For Equal Payout (Rule 2), percentage will be auto-calculated
+                                            // so we don't require it to be entered
+                                            const isEqualPayout = scheduleItem.payoutRuleId === "2";
+                                            if (!isEqualPayout && parsed === null) {
                                               return acc;
                                             }
                                             const fallbackGuid = entry.employeeGuid ?? `custom-${entry.id}`;
@@ -2287,9 +2380,11 @@ export default function Reconciliation() {
                                               return acc;
                                             }
                                             existingKeys.add(entryKey);
-                                            const payoutTips = roundCurrency((parsed / 100) * overallTips);
+                                            // For Equal Payout, use 0 as placeholder - will be recalculated
+                                            const effectivePct = isEqualPayout ? 0 : (parsed ?? 0);
+                                            const payoutTips = roundCurrency((effectivePct / 100) * overallTips);
                                             const payoutGratuity = roundCurrency(
-                                              (parsed / 100) * overallGratuity,
+                                              (effectivePct / 100) * overallGratuity,
                                             );
                                             acc.push({
                                               employeeGuid: fallbackGuid,
@@ -2301,7 +2396,7 @@ export default function Reconciliation() {
                                               hoursWorked: 1,
                                               isContributor: "No",
                                               payoutReceiverId: jobTitle,
-                                              payoutPercentage: parsed,
+                                              payoutPercentage: effectivePct,
                                               totalSales: 0,
                                               netSales: 0,
                                               totalTips: 0,
@@ -2389,7 +2484,9 @@ export default function Reconciliation() {
                                             const parsed = entry.payoutPercentage
                                               ? parsePercentage(entry.payoutPercentage)
                                               : null;
-                                            if (parsed === null) {
+                                            // For Equal Payout (Rule 2), percentage is auto-calculated
+                                            const isEqualPayout = scheduleItem.payoutRuleId === "2";
+                                            if (!isEqualPayout && parsed === null) {
                                               return acc;
                                             }
                                             const normalizedKey = normalizeRoleKey(jobTitle);
@@ -2397,9 +2494,11 @@ export default function Reconciliation() {
                                               return acc;
                                             }
                                             existingRoleKeys.add(normalizedKey);
+                                            // For Equal Payout, use 0 as placeholder
+                                            const effectivePct = isEqualPayout ? 0 : (parsed ?? 0);
                                             acc.push({
                                               receiverId: jobTitle,
-                                              payoutPercentage: parsed,
+                                              payoutPercentage: effectivePct,
                                               isContributor: false,
                                             });
                                             return acc;
