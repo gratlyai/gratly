@@ -207,6 +207,223 @@ def _get_payout_fee_info(cursor, restaurant_id: int) -> dict:
     }
 
 
+def _apply_hour_based_payout_calculations(
+    schedule: dict,
+    contributors: list,
+    cursor,
+    restaurant_id: int,
+) -> list:
+    """
+    Apply Hour Based Payout (Rule 3) calculations.
+    For Hour Based Payout:
+    - Each employee's share is based on hours worked ratio
+    - Payout percentage = (hours_worked / total_hours) * 100
+    - Prepayout is divided equally among all employees
+    - Transfer fee is applied to each employee
+    """
+    payout_schedule_id = schedule.get("payoutScheduleId") or schedule.get("PAYOUT_SCHEDULEID")
+
+    # Get trigger percentages
+    tip_trigger_pct = schedule.get("payoutTriggerTips") or schedule.get("PAYOUTTRIGGER_TIPS")
+    gratuity_trigger_pct = schedule.get("payoutTriggerGratuity") or schedule.get("PAYOUTTRIGGER_GRATUITY")
+
+    # Count total employees and total hours
+    total_employees = len(contributors)
+    if total_employees == 0:
+        return contributors
+
+    total_hours = sum(float(c.get("hoursWorked") or c.get("HOURS_WORKED") or 0) for c in contributors)
+
+    # Calculate overall tips and gratuity from ALL employees
+    all_tips = sum(float(c.get("totalTips") or c.get("TOTAL_TIPS") or 0) for c in contributors)
+    all_gratuity = sum(float(c.get("totalGratuity") or c.get("TOTAL_GRATUITY") or 0) for c in contributors)
+
+    # Apply trigger percentages to get contribution pool
+    pool_info = _calculate_contribution_pool(all_tips, all_gratuity, tip_trigger_pct, gratuity_trigger_pct)
+    contribution_pool = pool_info["contribution_pool"]
+    contributed_tips = pool_info["contributed_tips"]
+    contributed_gratuity = pool_info["contributed_gratuity"]
+
+    # Use contributed amounts (after trigger percentages applied)
+    overall_tips = contributed_tips if contributed_tips > 0 else all_tips
+    overall_gratuity = contributed_gratuity if contributed_gratuity > 0 else all_gratuity
+
+    # Get payout fee info
+    payout_fee_info = _get_payout_fee_info(cursor, restaurant_id)
+    payout_fee = payout_fee_info["fee_amount"] if payout_fee_info["applies_to_employees"] else 0.0
+
+    # Calculate prepayout per person (divided equally among all employees)
+    prepayout_per_person = _calculate_prepayout_per_person(
+        cursor, payout_schedule_id, total_employees, contribution_pool
+    )
+
+    print(f"=== _apply_hour_based_payout_calculations ===")
+    print(f"total_employees: {total_employees}")
+    print(f"total_hours: {total_hours}")
+    print(f"overall_tips: {overall_tips}, overall_gratuity: {overall_gratuity}")
+    print(f"prepayout_per_person: {prepayout_per_person}")
+    print(f"payout_fee: {payout_fee}")
+
+    # Apply calculations to each employee
+    updated_contributors = []
+
+    for person in contributors:
+        hours_worked = float(person.get("hoursWorked") or person.get("HOURS_WORKED") or 0)
+
+        # Calculate payout percentage based on hours worked ratio
+        if total_hours > 0 and hours_worked > 0:
+            payout_percentage = round((hours_worked / total_hours) * 100, 2)
+            payout_tips = round((hours_worked / total_hours) * overall_tips, 2)
+            payout_gratuity = round((hours_worked / total_hours) * overall_gratuity, 2)
+        else:
+            payout_percentage = 0.0
+            payout_tips = 0.0
+            payout_gratuity = 0.0
+
+        payout_amount = payout_tips + payout_gratuity
+
+        # Net payout = payout - prepayout - fee
+        if payout_amount > 0:
+            net_payout = max(0.0, payout_amount - prepayout_per_person - payout_fee)
+            actual_prepayout = prepayout_per_person
+            actual_payout_fee = payout_fee
+        else:
+            net_payout = 0.0
+            actual_prepayout = 0.0
+            actual_payout_fee = 0.0
+
+        # Debug logging
+        person_name = person.get("employeeName") or person.get("EMPLOYEE_NAME") or "Unknown"
+        print(f"HOUR BASED PAYOUT - {person_name}:")
+        print(f"  hours_worked={hours_worked}, payout_percentage={payout_percentage}")
+        print(f"  payout_tips={payout_tips}, payout_gratuity={payout_gratuity}")
+        print(f"  payout_amount={payout_amount}, prepayout={actual_prepayout}, fee={actual_payout_fee}")
+        print(f"  net_payout={net_payout}")
+
+        # Create updated person record
+        updated_person = dict(person)
+        updated_person["payoutTips"] = payout_tips
+        updated_person["payoutGratuity"] = payout_gratuity
+        updated_person["netPayout"] = round(net_payout, 2)
+        updated_person["prepayoutDeduction"] = actual_prepayout
+        updated_person["payoutFee"] = actual_payout_fee
+        updated_person["payoutPercentage"] = payout_percentage
+        updated_person["contributionPool"] = contribution_pool
+        updated_person["overallTips"] = overall_tips
+        updated_person["overallGratuity"] = overall_gratuity
+
+        updated_contributors.append(updated_person)
+
+    return updated_contributors
+
+
+def _apply_equal_payout_calculations(
+    schedule: dict,
+    contributors: list,
+    cursor,
+    restaurant_id: int,
+) -> list:
+    """
+    Apply Equal Payout (Rule 2) calculations.
+    For Equal Payout:
+    - All employees get an equal share of the total tips and gratuity
+    - Payout percentage = 100 / number of employees
+    - Prepayout is divided equally among all employees
+    - Transfer fee is applied to each employee
+    """
+    payout_schedule_id = schedule.get("payoutScheduleId") or schedule.get("PAYOUT_SCHEDULEID")
+
+    # Get trigger percentages
+    tip_trigger_pct = schedule.get("payoutTriggerTips") or schedule.get("PAYOUTTRIGGER_TIPS")
+    gratuity_trigger_pct = schedule.get("payoutTriggerGratuity") or schedule.get("PAYOUTTRIGGER_GRATUITY")
+
+    # Count total employees
+    total_employees = len(contributors)
+    if total_employees == 0:
+        return contributors
+
+    # Calculate payout percentage for each employee (100 / total employees)
+    payout_percentage_per_employee = round(100.0 / total_employees, 2)
+
+    # Calculate overall tips and gratuity from ALL employees (for Equal Payout, everyone contributes)
+    all_tips = sum(float(c.get("totalTips") or c.get("TOTAL_TIPS") or 0) for c in contributors)
+    all_gratuity = sum(float(c.get("totalGratuity") or c.get("TOTAL_GRATUITY") or 0) for c in contributors)
+
+    # Apply trigger percentages to get contribution pool
+    pool_info = _calculate_contribution_pool(all_tips, all_gratuity, tip_trigger_pct, gratuity_trigger_pct)
+    contribution_pool = pool_info["contribution_pool"]
+    contributed_tips = pool_info["contributed_tips"]
+    contributed_gratuity = pool_info["contributed_gratuity"]
+
+    # Use contributed amounts (after trigger percentages applied)
+    overall_tips = contributed_tips if contributed_tips > 0 else all_tips
+    overall_gratuity = contributed_gratuity if contributed_gratuity > 0 else all_gratuity
+
+    # Calculate payout per employee (equal share)
+    payout_tips_per_employee = round(overall_tips / total_employees, 2)
+    payout_gratuity_per_employee = round(overall_gratuity / total_employees, 2)
+
+    # Get payout fee info
+    payout_fee_info = _get_payout_fee_info(cursor, restaurant_id)
+    payout_fee = payout_fee_info["fee_amount"] if payout_fee_info["applies_to_employees"] else 0.0
+
+    # Calculate prepayout per person (divided equally among all employees)
+    prepayout_per_person = _calculate_prepayout_per_person(
+        cursor, payout_schedule_id, total_employees, contribution_pool
+    )
+
+    print(f"=== _apply_equal_payout_calculations ===")
+    print(f"total_employees: {total_employees}")
+    print(f"payout_percentage_per_employee: {payout_percentage_per_employee}")
+    print(f"overall_tips: {overall_tips}, overall_gratuity: {overall_gratuity}")
+    print(f"payout_tips_per_employee: {payout_tips_per_employee}, payout_gratuity_per_employee: {payout_gratuity_per_employee}")
+    print(f"prepayout_per_person: {prepayout_per_person}")
+    print(f"payout_fee: {payout_fee}")
+
+    # Apply calculations to each employee
+    updated_contributors = []
+
+    for person in contributors:
+        # For Equal Payout, everyone gets an equal share
+        payout_tips = payout_tips_per_employee
+        payout_gratuity = payout_gratuity_per_employee
+        payout_amount = payout_tips + payout_gratuity
+
+        # Gross payout is the payout amount (since everyone gets tips equally, we don't add personal tips)
+        # Net payout = payout - prepayout - fee
+        if payout_amount > 0:
+            net_payout = max(0.0, payout_amount - prepayout_per_person - payout_fee)
+            actual_prepayout = prepayout_per_person
+            actual_payout_fee = payout_fee
+        else:
+            net_payout = 0.0
+            actual_prepayout = 0.0
+            actual_payout_fee = 0.0
+
+        # Debug logging
+        person_name = person.get("employeeName") or person.get("EMPLOYEE_NAME") or "Unknown"
+        print(f"EQUAL PAYOUT - {person_name}:")
+        print(f"  payout_tips={payout_tips}, payout_gratuity={payout_gratuity}")
+        print(f"  payout_amount={payout_amount}, prepayout={actual_prepayout}, fee={actual_payout_fee}")
+        print(f"  net_payout={net_payout}")
+
+        # Create updated person record
+        updated_person = dict(person)
+        updated_person["payoutTips"] = payout_tips
+        updated_person["payoutGratuity"] = payout_gratuity
+        updated_person["netPayout"] = round(net_payout, 2)
+        updated_person["prepayoutDeduction"] = actual_prepayout
+        updated_person["payoutFee"] = actual_payout_fee
+        updated_person["payoutPercentage"] = payout_percentage_per_employee
+        updated_person["contributionPool"] = contribution_pool
+        updated_person["overallTips"] = overall_tips
+        updated_person["overallGratuity"] = overall_gratuity
+
+        updated_contributors.append(updated_person)
+
+    return updated_contributors
+
+
 def _apply_calculations_to_schedule(
     schedule: dict,
     contributors: list,
@@ -219,6 +436,14 @@ def _apply_calculations_to_schedule(
     """
     payout_rule_id = str(schedule.get("payoutRuleId") or schedule.get("PAYOUT_RULE_ID") or "")
     payout_schedule_id = schedule.get("payoutScheduleId") or schedule.get("PAYOUT_SCHEDULEID")
+
+    # Handle Equal Payout (Rule 2) separately
+    if payout_rule_id == "2":
+        return _apply_equal_payout_calculations(schedule, contributors, cursor, restaurant_id)
+
+    # Handle Hour Based Payout (Rule 3) separately
+    if payout_rule_id == "3":
+        return _apply_hour_based_payout_calculations(schedule, contributors, cursor, restaurant_id)
 
     # Get trigger percentages
     tip_trigger_pct = schedule.get("payoutTriggerTips") or schedule.get("PAYOUTTRIGGER_TIPS")
