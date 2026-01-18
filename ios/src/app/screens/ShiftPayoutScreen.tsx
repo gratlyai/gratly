@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -13,6 +14,7 @@ import AppShell from "../components/AppShell";
 import { useAuth } from "../providers/useAuth";
 import { useSessionScope } from "../hooks/useSessionScope";
 import {
+  activatePayoutSchedule,
   createPayoutSchedule,
   deletePayoutSchedule,
   fetchJobTitles,
@@ -28,9 +30,15 @@ import { defaultEmployeePermissions } from "../../core/auth/permissions";
 type ViewMode = "existing" | "create";
 
 type PrePayoutEntry = {
-  type: "Fixed Amount" | "Percentage";
+  type: "Fixed Amount" | "Percentage" | "";
   value: string;
   account: string;
+};
+
+type Fund = {
+  name: string;
+  selected: boolean;
+  percentage: number;
 };
 
 const payoutRuleOptions = [
@@ -100,21 +108,29 @@ const ShiftPayoutScreen = () => {
   const [schedulesError, setSchedulesError] = useState("");
   const [selectedScheduleId, setSelectedScheduleId] = useState<number | null>(null);
   const [expandedScheduleId, setExpandedScheduleId] = useState<number | null>(null);
+  const [expandedScheduleDetails, setExpandedScheduleDetails] = useState<
+    Record<number, PayoutScheduleDetail>
+  >({});
+  const [loadingExpandedDetails, setLoadingExpandedDetails] = useState<Record<number, boolean>>({});
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isActivating, setIsActivating] = useState(false);
   const [deleteMessage, setDeleteMessage] = useState("");
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [detailsError, setDetailsError] = useState("");
   const [jobTitles, setJobTitles] = useState<string[]>([]);
-  const [jobTitlesError, setJobTitlesError] = useState("");
+  const [showInactiveSchedules, setShowInactiveSchedules] = useState(false);
+  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
 
   const [formName, setFormName] = useState("");
   const [startDay, setStartDay] = useState("");
   const [endDay, setEndDay] = useState("");
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
+  const [fundsFrom, setFundsFrom] = useState<Fund[]>([
+    { name: "Gratuity", selected: true, percentage: 100 },
+    { name: "Tips", selected: true, percentage: 100 },
+  ]);
   const [payoutRule, setPayoutRule] = useState("Job Weighted Payout");
-  const [gratuityPercent, setGratuityPercent] = useState("100");
-  const [tipsPercent, setTipsPercent] = useState("100");
   const [payoutContributors, setPayoutContributors] = useState<string[]>([]);
   const [payoutReceivers, setPayoutReceivers] = useState<string[]>([]);
   const [receiverPercentages, setReceiverPercentages] = useState<Record<string, string>>({});
@@ -130,10 +146,36 @@ const ShiftPayoutScreen = () => {
   const [showEndDayOptions, setShowEndDayOptions] = useState(false);
   const [showStartTimeOptions, setShowStartTimeOptions] = useState(false);
   const [showEndTimeOptions, setShowEndTimeOptions] = useState(false);
-  const [showRuleOptions, setShowRuleOptions] = useState(false);
+  const [showContributorDropdown, setShowContributorDropdown] = useState(false);
+  const [showReceiverDropdown, setShowReceiverDropdown] = useState(false);
+  const [contributorSearch, setContributorSearch] = useState("");
+  const [receiverSearch, setReceiverSearch] = useState("");
 
   const userId = scope?.userId ?? null;
   const restaurantId = scope?.restaurantId ?? null;
+
+  const payoutPercentTargets = useMemo(
+    () => Array.from(new Set([...payoutContributors, ...payoutReceivers])),
+    [payoutContributors, payoutReceivers],
+  );
+
+  const contributorPercentage = useMemo(() => {
+    if (payoutContributors.length === 0) return 0;
+    return Number(receiverPercentages[payoutContributors[0]] ?? 0);
+  }, [payoutContributors, receiverPercentages]);
+
+  const receiverPercentageTotal = useMemo(() => {
+    return payoutReceivers
+      .filter((receiver) => !payoutContributors.includes(receiver))
+      .reduce((sum, receiver) => {
+        const value = Number(receiverPercentages[receiver] ?? 0);
+        return sum + (Number.isFinite(value) ? value : 0);
+      }, 0);
+  }, [payoutReceivers, payoutContributors, receiverPercentages]);
+
+  const totalPercentage = useMemo(() => {
+    return (payoutContributors.length > 0 ? contributorPercentage : 0) + receiverPercentageTotal;
+  }, [payoutContributors, contributorPercentage, receiverPercentageTotal]);
 
   const resetForm = () => {
     setFormName("");
@@ -141,9 +183,11 @@ const ShiftPayoutScreen = () => {
     setEndDay("");
     setStartTime("");
     setEndTime("");
+    setFundsFrom([
+      { name: "Gratuity", selected: true, percentage: 100 },
+      { name: "Tips", selected: true, percentage: 100 },
+    ]);
     setPayoutRule("Job Weighted Payout");
-    setGratuityPercent("100");
-    setTipsPercent("100");
     setPayoutContributors([]);
     setPayoutReceivers([]);
     setReceiverPercentages({});
@@ -153,6 +197,8 @@ const ShiftPayoutScreen = () => {
     setEditingScheduleId(null);
     setSubmitError("");
     setSubmitSuccess("");
+    setContributorSearch("");
+    setReceiverSearch("");
   };
 
   const loadSchedules = useCallback(async () => {
@@ -162,7 +208,7 @@ const ShiftPayoutScreen = () => {
     setIsLoadingSchedules(true);
     setSchedulesError("");
     try {
-      const data = await fetchPayoutSchedules(userId, restaurantId);
+      const data = await fetchPayoutSchedules(userId, restaurantId, showInactiveSchedules);
       setSchedules(data);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to load schedules.";
@@ -170,7 +216,7 @@ const ShiftPayoutScreen = () => {
     } finally {
       setIsLoadingSchedules(false);
     }
-  }, [restaurantId, userId]);
+  }, [restaurantId, userId, showInactiveSchedules]);
 
   useEffect(() => {
     if (activeView === "existing") {
@@ -185,13 +231,25 @@ const ShiftPayoutScreen = () => {
     fetchJobTitles(userId, restaurantId)
       .then((titles) => setJobTitles(titles))
       .catch((error) => {
-        const message = error instanceof Error ? error.message : "Failed to load job titles.";
-        setJobTitlesError(message);
+        console.warn("Failed to load job titles:", error);
       });
   }, [restaurantId, userId]);
 
-  const toggleScheduleExpanded = (scheduleId: number) => {
+  const toggleScheduleExpanded = async (scheduleId: number) => {
+    const isCurrentlyExpanded = expandedScheduleId === scheduleId;
     setExpandedScheduleId((prev) => (prev === scheduleId ? null : scheduleId));
+
+    if (!isCurrentlyExpanded && !expandedScheduleDetails[scheduleId] && userId && restaurantId) {
+      setLoadingExpandedDetails((prev) => ({ ...prev, [scheduleId]: true }));
+      try {
+        const detail = await fetchPayoutScheduleDetail(scheduleId, userId, restaurantId);
+        setExpandedScheduleDetails((prev) => ({ ...prev, [scheduleId]: detail }));
+      } catch (error) {
+        console.error("Failed to load schedule details:", error);
+      } finally {
+        setLoadingExpandedDetails((prev) => ({ ...prev, [scheduleId]: false }));
+      }
+    }
   };
 
   const handleDeleteSchedule = async () => {
@@ -202,31 +260,37 @@ const ShiftPayoutScreen = () => {
     setDeleteMessage("");
     try {
       await deletePayoutSchedule(selectedScheduleId, userId, restaurantId);
-      setDeleteMessage("Schedule deleted.");
+      setDeleteMessage("Schedule archived.");
       setSelectedScheduleId(null);
       setExpandedScheduleId(null);
       await loadSchedules();
+      setTimeout(() => setDeleteMessage(""), 3000);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to delete schedule.";
+      const message = error instanceof Error ? error.message : "Failed to archive schedule.";
       setDeleteMessage(message);
     } finally {
       setIsDeleting(false);
     }
   };
 
-  const handleOpenDelete = () => {
-    if (!selectedScheduleId) {
+  const handleActivateSchedule = async (scheduleId: number) => {
+    if (userId === null) {
       return;
     }
-    Alert.alert(
-      "Delete schedule?",
-      "This action cannot be undone.",
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Yes, delete", style: "destructive", onPress: () => void handleDeleteSchedule() },
-      ],
-      { cancelable: true },
-    );
+    setIsActivating(true);
+    setDeleteMessage("");
+    try {
+      await activatePayoutSchedule(scheduleId, userId);
+      setDeleteMessage("Schedule activated.");
+      setExpandedScheduleId(null);
+      await loadSchedules();
+      setTimeout(() => setDeleteMessage(""), 3000);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to activate schedule.";
+      setDeleteMessage(message);
+    } finally {
+      setIsActivating(false);
+    }
   };
 
   const loadScheduleDetails = async (scheduleId: number) => {
@@ -247,15 +311,24 @@ const ShiftPayoutScreen = () => {
       setStartTime(detail.start_time ?? "");
       setEndTime(detail.end_time ?? "");
       setPayoutRule(payoutRuleFromLabel(detail.payout_rule_id ?? null));
-      setGratuityPercent(
-        detail.payout_triggers?.gratuity !== undefined && detail.payout_triggers?.gratuity !== null
-          ? String(detail.payout_triggers.gratuity)
-          : "100",
-      );
-      setTipsPercent(
-        detail.payout_triggers?.tips !== undefined && detail.payout_triggers?.tips !== null
-          ? String(detail.payout_triggers.tips)
-          : "100",
+
+      setFundsFrom((prev) =>
+        prev.map((fund) => {
+          const key = fund.name.toLowerCase();
+          const triggerValue =
+            key === "gratuity"
+              ? detail.payout_triggers?.gratuity
+              : key === "tips"
+                ? detail.payout_triggers?.tips
+                : undefined;
+          return {
+            ...fund,
+            percentage:
+              typeof triggerValue === "number" && Number.isFinite(triggerValue)
+                ? triggerValue
+                : fund.percentage,
+          };
+        }),
       );
 
       const contributors: string[] = [];
@@ -315,25 +388,46 @@ const ShiftPayoutScreen = () => {
     }
   };
 
-  const updateSelection = (
-    value: string,
-    list: string[],
-    setList: React.Dispatch<React.SetStateAction<string[]>>,
-  ) => {
-    setList((prev) =>
-      prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value],
+  const updateFundPercentage = (index: number, value: string) => {
+    const numericValue = Number(value);
+    setFundsFrom((prev) =>
+      prev.map((fund, idx) =>
+        idx === index
+          ? { ...fund, percentage: Number.isFinite(numericValue) ? numericValue : 0 }
+          : fund,
+      ),
+    );
+  };
+
+  const toggleContributor = (title: string) => {
+    setPayoutContributors((prev) =>
+      prev.includes(title) ? prev.filter((t) => t !== title) : [...prev, title],
+    );
+  };
+
+  const toggleReceiver = (title: string) => {
+    setPayoutReceivers((prev) =>
+      prev.includes(title) ? prev.filter((t) => t !== title) : [...prev, title],
     );
   };
 
   const handleReceiverPercentageChange = (name: string, value: string) => {
-    setReceiverPercentages((prev) => ({ ...prev, [name]: value }));
+    if (payoutContributors.includes(name)) {
+      // For contributors, update all contributors with the same value
+      setReceiverPercentages((prev) => {
+        const updated = { ...prev };
+        payoutContributors.forEach((contributor) => {
+          updated[contributor] = value;
+        });
+        return updated;
+      });
+    } else {
+      setReceiverPercentages((prev) => ({ ...prev, [name]: value }));
+    }
   };
 
   const addPrePayout = () => {
-    setPrePayouts((prev) => [
-      ...prev,
-      { type: "Fixed Amount", value: "", account: "" },
-    ]);
+    setPrePayouts((prev) => [...prev, { type: "", value: "", account: "" }]);
   };
 
   const updatePrePayout = (index: number, next: Partial<PrePayoutEntry>) => {
@@ -354,14 +448,31 @@ const ShiftPayoutScreen = () => {
       setSubmitError("Schedule name is required.");
       return;
     }
+
+    // Validate percentages for Custom or Job Weighted Payout
+    if (
+      (payoutRule === "Custom Payout" || payoutRule === "Job Weighted Payout") &&
+      payoutPercentTargets.length > 0
+    ) {
+      if (Math.abs(totalPercentage - 100) > 0.01) {
+        setSubmitError("Contributor percentage + sum of receiver percentages must total 100%.");
+        return;
+      }
+    }
+
     setIsSubmitting(true);
     setSubmitError("");
     setSubmitSuccess("");
+
+    const gratuityTrigger = fundsFrom.find((f) => f.name.toLowerCase() === "gratuity")?.percentage;
+    const tipsTrigger = fundsFrom.find((f) => f.name.toLowerCase() === "tips")?.percentage;
+
     const payoutPercentages: Record<string, number | null> = {};
     Object.entries(receiverPercentages).forEach(([key, value]) => {
       const parsed = Number(value);
       payoutPercentages[key] = Number.isFinite(parsed) ? parsed : null;
     });
+
     const payload = {
       user_id: userId,
       restaurant_id: restaurantId,
@@ -371,8 +482,8 @@ const ShiftPayoutScreen = () => {
       start_time: startTime || null,
       end_time: endTime || null,
       payout_triggers: {
-        gratuity: Number(gratuityPercent) || 0,
-        tips: Number(tipsPercent) || 0,
+        gratuity: gratuityTrigger ?? null,
+        tips: tipsTrigger ?? null,
       },
       payout_rule: payoutRule,
       payout_contributors: payoutContributors,
@@ -383,13 +494,14 @@ const ShiftPayoutScreen = () => {
         : null,
       custom_group_contribution: customGroupContribution ? Number(customGroupContribution) : null,
       pre_payouts: prePayouts
-        .filter((entry) => entry.value && entry.account)
+        .filter((entry) => entry.type && entry.value && entry.account)
         .map((entry) => ({
           option: entry.type,
           value: entry.value ? Number(entry.value) : null,
           account: entry.account,
         })),
     };
+
     try {
       if (editingScheduleId) {
         await updatePayoutSchedule(editingScheduleId, payload);
@@ -409,9 +521,6 @@ const ShiftPayoutScreen = () => {
     }
   };
 
-  const scheduleStatus = (schedule: PayoutScheduleRow) =>
-    schedule.start_day || schedule.start_time ? "Scheduled" : "Draft";
-
   const formatDayRange = (start: string | null, end: string | null) => {
     if (!start && !end) return "—";
     if (start && end) return `${start} - ${end}`;
@@ -429,6 +538,18 @@ const ShiftPayoutScreen = () => {
     return list.sort((a, b) => a.localeCompare(b));
   }, [jobTitles]);
 
+  const filteredContributors = useMemo(() => {
+    const search = contributorSearch.trim().toLowerCase();
+    if (!search) return groupedJobTitles;
+    return groupedJobTitles.filter((t) => t.toLowerCase().includes(search));
+  }, [groupedJobTitles, contributorSearch]);
+
+  const filteredReceivers = useMemo(() => {
+    const search = receiverSearch.trim().toLowerCase();
+    if (!search) return groupedJobTitles;
+    return groupedJobTitles.filter((t) => t.toLowerCase().includes(search));
+  }, [groupedJobTitles, receiverSearch]);
+
   if (!canView) {
     return (
       <AppShell>
@@ -444,39 +565,94 @@ const ShiftPayoutScreen = () => {
 
   return (
     <AppShell>
-      <ScrollView contentContainerStyle={styles.container}>
-        {activeView === "existing" ? (
-          <>
-            <Text style={styles.pageTitle}>Shift Payout Schedules</Text>
-            <View style={styles.actionRow}>
+      {/* Delete Confirmation Modal */}
+      <Modal visible={isDeleteConfirmOpen} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Archive schedule?</Text>
+            <Text style={styles.modalText}>
+              This action cannot be undone. Are you sure you want to archive this payout schedule?
+            </Text>
+            <View style={styles.modalActions}>
+              <Pressable
+                style={styles.secondaryButton}
+                onPress={() => setIsDeleteConfirmOpen(false)}
+              >
+                <Text style={styles.secondaryButtonText}>Cancel</Text>
+              </Pressable>
               <Pressable
                 style={styles.primaryButton}
                 onPress={() => {
-                  resetForm();
-                  setActiveView("create");
+                  setIsDeleteConfirmOpen(false);
+                  void handleDeleteSchedule();
                 }}
               >
-                <Text style={styles.primaryButtonText}>Create Schedule</Text>
+                <Text style={styles.primaryButtonText}>Yes, archive</Text>
               </Pressable>
-              <Pressable
-                style={[
-                  styles.secondaryButton,
-                  (!selectedScheduleId || isDeleting) && styles.buttonDisabled,
-                ]}
-                onPress={handleOpenDelete}
-                disabled={!selectedScheduleId || isDeleting}
-              >
-                <Text style={styles.secondaryButtonText}>
-                  {isDeleting ? "Deleting..." : "Delete"}
-                </Text>
-              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <ScrollView contentContainerStyle={styles.container}>
+        {activeView === "existing" ? (
+          <>
+            <View style={styles.headerSection}>
+              <Text style={styles.pageTitle}>Shift Payout Schedules</Text>
+              <Text style={styles.pageSubtitle}>
+                Create and manage shift payout schedules for your team.
+              </Text>
+            </View>
+
+            <View style={styles.controlsRow}>
+              <View style={styles.toggleRow}>
+                <Text style={styles.toggleLabel}>Show Archived</Text>
+                <Switch
+                  value={showInactiveSchedules}
+                  onValueChange={setShowInactiveSchedules}
+                  trackColor={{ false: "#e5e7eb", true: "#cab99a" }}
+                  thumbColor="#ffffff"
+                />
+              </View>
+              <View style={styles.actionRow}>
+                <Pressable
+                  style={styles.primaryButtonSmall}
+                  onPress={() => {
+                    resetForm();
+                    setActiveView("create");
+                  }}
+                >
+                  <Text style={styles.primaryButtonText}>Create Schedule</Text>
+                </Pressable>
+                <Pressable
+                  style={[
+                    styles.secondaryButtonSmall,
+                    (!selectedScheduleId || isDeleting) && styles.buttonDisabled,
+                  ]}
+                  onPress={() => setIsDeleteConfirmOpen(true)}
+                  disabled={!selectedScheduleId || isDeleting}
+                >
+                  <Text style={styles.secondaryButtonText}>
+                    {isDeleting ? "Archiving..." : "Archive"}
+                  </Text>
+                </Pressable>
+              </View>
             </View>
           </>
         ) : null}
 
         {activeView === "existing" ? (
           <View>
-            {deleteMessage ? <Text style={styles.statusText}>{deleteMessage}</Text> : null}
+            {deleteMessage ? (
+              <Text
+                style={[
+                  styles.statusText,
+                  deleteMessage.includes("Failed") && styles.errorText,
+                ]}
+              >
+                {deleteMessage}
+              </Text>
+            ) : null}
             {schedulesError ? <Text style={styles.errorText}>{schedulesError}</Text> : null}
 
             <View style={styles.list}>
@@ -487,12 +663,17 @@ const ShiftPayoutScreen = () => {
                 </View>
               ) : schedules.length === 0 ? (
                 <View style={styles.emptyBox}>
-                  <Text style={styles.emptyText}>No schedules yet. Create your first payout schedule.</Text>
+                  <Text style={styles.emptyText}>
+                    No schedules yet. Create your first payout schedule.
+                  </Text>
                 </View>
               ) : (
                 schedules.map((schedule) => {
                   const isSelected = selectedScheduleId === schedule.payout_schedule_id;
                   const isExpanded = expandedScheduleId === schedule.payout_schedule_id;
+                  const details = expandedScheduleDetails[schedule.payout_schedule_id];
+                  const isLoadingExpanded = loadingExpandedDetails[schedule.payout_schedule_id];
+
                   return (
                     <View
                       key={schedule.payout_schedule_id}
@@ -518,42 +699,206 @@ const ShiftPayoutScreen = () => {
                             <Text style={styles.cellLabel}>Name</Text>
                             <Text style={styles.cellValue}>{schedule.name}</Text>
                           </View>
-                          <View style={styles.scheduleCell}>
-                            <Text style={styles.cellLabel}>Status</Text>
-                            <Text style={styles.cellValue}>{scheduleStatus(schedule)}</Text>
+                          <View style={styles.scheduleRowInline}>
+                            <View style={styles.scheduleCellInline}>
+                              <Text style={styles.cellLabel}>Payout Rule</Text>
+                              <Text style={styles.cellValue}>
+                                {payoutRuleLabel(schedule.payout_rule_id)}
+                              </Text>
+                            </View>
+                            <View style={styles.scheduleCellRight}>
+                              <Text style={styles.cellLabel}>Status</Text>
+                              <View
+                                style={[
+                                  styles.statusBadge,
+                                  schedule.is_active
+                                    ? styles.statusBadgeActive
+                                    : styles.statusBadgeInactive,
+                                ]}
+                              >
+                                <Text
+                                  style={[
+                                    styles.statusBadgeText,
+                                    schedule.is_active
+                                      ? styles.statusBadgeTextActive
+                                      : styles.statusBadgeTextInactive,
+                                  ]}
+                                >
+                                  {schedule.is_active ? "Active" : "Inactive"}
+                                </Text>
+                              </View>
+                            </View>
                           </View>
-                          <View style={styles.scheduleCell}>
-                            <Text style={styles.cellLabel}>Payout Rule</Text>
-                            <Text style={styles.cellValue}>
-                              {payoutRuleLabel(schedule.payout_rule_id)}
-                            </Text>
-                          </View>
-                          <View style={styles.scheduleCell}>
-                            <Text style={styles.cellLabel}>Day</Text>
-                            <Text style={styles.cellValue}>
-                              {formatDayRange(schedule.start_day, schedule.end_day)}
-                            </Text>
-                          </View>
-                          <View style={styles.scheduleCell}>
-                            <Text style={styles.cellLabel}>Time</Text>
-                            <Text style={styles.cellValue}>
-                              {formatTimeRange(schedule.start_time, schedule.end_time)}
-                            </Text>
+                          <View style={styles.scheduleRowInline}>
+                            <View style={styles.scheduleCellInline}>
+                              <Text style={styles.cellLabel}>Day</Text>
+                              <Text style={styles.cellValue}>
+                                {formatDayRange(schedule.start_day, schedule.end_day)}
+                              </Text>
+                            </View>
+                            <View style={styles.scheduleCellRight}>
+                              <Text style={styles.cellLabel}>Time</Text>
+                              <Text style={styles.cellValue}>
+                                {formatTimeRange(schedule.start_time, schedule.end_time)}
+                              </Text>
+                            </View>
                           </View>
                         </View>
-                        <Text style={styles.expandIcon}>{isExpanded ? "-" : "+"}</Text>
+                        <Text style={styles.expandIcon}>{isExpanded ? "−" : "+"}</Text>
                       </Pressable>
+
                       {isExpanded ? (
-                        <View style={styles.scheduleFooter}>
-                          <Text style={styles.scheduleHint}>
-                            Review this schedule or open it to edit payout settings.
-                          </Text>
-                          <Pressable
-                            style={styles.primaryButtonSmall}
-                            onPress={() => void loadScheduleDetails(schedule.payout_schedule_id)}
-                          >
-                            <Text style={styles.primaryButtonText}>Edit Schedule</Text>
-                          </Pressable>
+                        <View style={styles.expandedSection}>
+                          {isLoadingExpanded ? (
+                            <View style={styles.loadingBox}>
+                              <ActivityIndicator size={16} />
+                              <Text style={styles.loadingText}>Loading details...</Text>
+                            </View>
+                          ) : details ? (
+                            <>
+                              {/* Payout Triggers */}
+                              {details.payout_triggers ? (
+                                <View style={styles.detailSection}>
+                                  <Text style={styles.detailSectionTitle}>Payout Triggers</Text>
+                                  <View style={styles.detailRow}>
+                                    <Text style={styles.detailLabel}>Gratuity:</Text>
+                                    <Text style={styles.detailValue}>
+                                      {details.payout_triggers.gratuity ?? "N/A"}%
+                                    </Text>
+                                  </View>
+                                  <View style={styles.detailRow}>
+                                    <Text style={styles.detailLabel}>Tips:</Text>
+                                    <Text style={styles.detailValue}>
+                                      {details.payout_triggers.tips ?? "N/A"}%
+                                    </Text>
+                                  </View>
+                                </View>
+                              ) : null}
+
+                              {/* Contributors & Receivers */}
+                              {details.payout_receivers && details.payout_receivers.length > 0 ? (
+                                <>
+                                  {(() => {
+                                    const contributors = details.payout_receivers.filter(
+                                      (r) => r.contributor_receiver === 0,
+                                    );
+                                    const contributorNames = new Set(
+                                      contributors.map((c) => c.payout_receiver_id),
+                                    );
+                                    const receivers = details.payout_receivers.filter(
+                                      (r) =>
+                                        r.contributor_receiver === 1 &&
+                                        !contributorNames.has(r.payout_receiver_id),
+                                    );
+                                    const receiverTotal = receivers.reduce(
+                                      (sum, r) => sum + (r.payout_percentage ?? 0),
+                                      0,
+                                    );
+                                    const contribPercent = 100 - receiverTotal;
+
+                                    return (
+                                      <>
+                                        {contributors.length > 0 ? (
+                                          <View style={styles.detailSection}>
+                                            <View style={styles.detailHeaderRow}>
+                                              <Text style={styles.detailSectionTitle}>
+                                                Contributors
+                                              </Text>
+                                              <Text style={styles.detailPercentBadge}>
+                                                {contribPercent}%
+                                              </Text>
+                                            </View>
+                                            <View style={styles.chipGrid}>
+                                              {contributors.map((c, idx) => (
+                                                <View key={idx} style={styles.detailChip}>
+                                                  <Text style={styles.detailChipText}>
+                                                    {c.payout_receiver_id}
+                                                  </Text>
+                                                </View>
+                                              ))}
+                                            </View>
+                                          </View>
+                                        ) : null}
+
+                                        {receivers.length > 0 ? (
+                                          <View style={styles.detailSection}>
+                                            <View style={styles.detailHeaderRow}>
+                                              <Text style={styles.detailSectionTitle}>
+                                                Receivers
+                                              </Text>
+                                              <Text style={styles.detailPercentBadge}>
+                                                {receiverTotal}%
+                                              </Text>
+                                            </View>
+                                            {receivers.map((r, idx) => (
+                                              <View key={idx} style={styles.detailRow}>
+                                                <Text style={styles.detailLabel}>
+                                                  {r.payout_receiver_id}
+                                                </Text>
+                                                <Text style={styles.detailValue}>
+                                                  {r.payout_percentage ?? "N/A"}%
+                                                </Text>
+                                              </View>
+                                            ))}
+                                          </View>
+                                        ) : null}
+                                      </>
+                                    );
+                                  })()}
+                                </>
+                              ) : null}
+
+                              {/* Pre-Payouts */}
+                              {details.pre_payouts && details.pre_payouts.length > 0 ? (
+                                <View style={styles.detailSection}>
+                                  <Text style={styles.detailSectionTitle}>Pre-Payout Entries</Text>
+                                  {details.pre_payouts.map((pp, idx) => (
+                                    <View key={idx} style={styles.detailRow}>
+                                      <Text style={styles.detailLabel}>
+                                        {pp.user_account || "Unknown"}
+                                      </Text>
+                                      <Text style={styles.detailValue}>
+                                        {pp.pre_payout_option === 1
+                                          ? `$${pp.pre_payout_value}`
+                                          : `${pp.pre_payout_value}%`}
+                                      </Text>
+                                    </View>
+                                  ))}
+                                </View>
+                              ) : null}
+
+                              {/* Action Button */}
+                              <View style={styles.expandedActions}>
+                                {schedule.is_active ? (
+                                  <Pressable
+                                    style={styles.primaryButtonSmall}
+                                    onPress={() =>
+                                      void loadScheduleDetails(schedule.payout_schedule_id)
+                                    }
+                                  >
+                                    <Text style={styles.primaryButtonText}>Edit Schedule</Text>
+                                  </Pressable>
+                                ) : (
+                                  <Pressable
+                                    style={[
+                                      styles.primaryButtonSmall,
+                                      isActivating && styles.buttonDisabled,
+                                    ]}
+                                    onPress={() =>
+                                      void handleActivateSchedule(schedule.payout_schedule_id)
+                                    }
+                                    disabled={isActivating}
+                                  >
+                                    <Text style={styles.primaryButtonText}>
+                                      {isActivating ? "Activating..." : "Activate this Payout"}
+                                    </Text>
+                                  </Pressable>
+                                )}
+                              </View>
+                            </>
+                          ) : (
+                            <Text style={styles.errorText}>Failed to load details</Text>
+                          )}
                         </View>
                       ) : null}
                     </View>
@@ -574,6 +919,7 @@ const ShiftPayoutScreen = () => {
             {submitError ? <Text style={styles.errorText}>{submitError}</Text> : null}
             {submitSuccess ? <Text style={styles.statusText}>{submitSuccess}</Text> : null}
 
+            {/* Schedule Section */}
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Schedule</Text>
               <Text style={styles.inputLabel}>Payout Schedule Name</Text>
@@ -651,7 +997,7 @@ const ShiftPayoutScreen = () => {
                   </Pressable>
                   {showStartTimeOptions ? (
                     <View style={styles.optionsBox}>
-                      <ScrollView style={styles.optionsScroll}>
+                      <ScrollView style={styles.optionsScroll} nestedScrollEnabled>
                         {timeOptions.map((time) => (
                           <Pressable
                             key={`start-${time}`}
@@ -681,7 +1027,7 @@ const ShiftPayoutScreen = () => {
                   </Pressable>
                   {showEndTimeOptions ? (
                     <View style={styles.optionsBox}>
-                      <ScrollView style={styles.optionsScroll}>
+                      <ScrollView style={styles.optionsScroll} nestedScrollEnabled>
                         {timeOptions.map((time) => (
                           <Pressable
                             key={`end-${time}`}
@@ -701,139 +1047,294 @@ const ShiftPayoutScreen = () => {
               </View>
             </View>
 
+            {/* Payout Section */}
             <View style={styles.sectionCard}>
-              <Text style={styles.sectionTitle}>Funds From</Text>
-              <View style={styles.row}>
-                <View style={styles.flex}>
-                  <Text style={styles.inputLabel}>Gratuity (%)</Text>
-                  <TextInput
-                    value={gratuityPercent}
-                    onChangeText={setGratuityPercent}
-                    style={styles.input}
-                    keyboardType="numeric"
-                    placeholder="100"
-                  />
-                </View>
-                <View style={styles.flex}>
-                  <Text style={styles.inputLabel}>Tips (%)</Text>
-                  <TextInput
-                    value={tipsPercent}
-                    onChangeText={setTipsPercent}
-                    style={styles.input}
-                    keyboardType="numeric"
-                    placeholder="100"
-                  />
-                </View>
-              </View>
-            </View>
+              <Text style={styles.sectionTitle}>Payout</Text>
 
-            <View style={styles.sectionCard}>
-              <Text style={styles.sectionTitle}>Payout Rule</Text>
+              {/* Payout Triggers */}
+              <Text style={styles.inputLabel}>Payout Triggers</Text>
+              {fundsFrom.map((fund, index) => (
+                <View key={fund.name} style={styles.fundRow}>
+                  <Text style={styles.fundName}>{fund.name}</Text>
+                  <View style={styles.fundInputContainer}>
+                    <TextInput
+                      value={String(fund.percentage)}
+                      onChangeText={(value) => updateFundPercentage(index, value)}
+                      style={styles.fundInput}
+                      keyboardType="numeric"
+                    />
+                    <Text style={styles.fundPercent}>%</Text>
+                  </View>
+                </View>
+              ))}
+
+              {/* Payout Contributors */}
+              <Text style={[styles.inputLabel, { marginTop: 16 }]}>Select Payout Contributors</Text>
               <Pressable
                 style={styles.select}
-                onPress={() => setShowRuleOptions((prev) => !prev)}
+                onPress={() => setShowContributorDropdown((prev) => !prev)}
               >
-                <Text style={styles.selectText}>{payoutRule}</Text>
+                <View style={styles.selectedChipsContainer}>
+                  {payoutContributors.length > 0 ? (
+                    payoutContributors.map((c) => (
+                      <View key={c} style={styles.selectedChip}>
+                        <Text style={styles.selectedChipText}>{c}</Text>
+                        <Pressable
+                          onPress={(e) => {
+                            e.stopPropagation();
+                            toggleContributor(c);
+                          }}
+                        >
+                          <Text style={styles.selectedChipRemove}>×</Text>
+                        </Pressable>
+                      </View>
+                    ))
+                  ) : (
+                    <Text style={styles.selectPlaceholder}>Select Contributors</Text>
+                  )}
+                </View>
                 <Text style={styles.selectCaret}>▾</Text>
               </Pressable>
-              {showRuleOptions ? (
-                <View style={styles.optionsBox}>
-                  {payoutRuleOptions.map((rule) => (
-                    <Pressable
-                      key={rule}
-                      style={styles.optionRow}
-                      onPress={() => {
-                        setPayoutRule(rule);
-                        setShowRuleOptions(false);
-                      }}
-                    >
-                      <Text style={styles.optionText}>{rule}</Text>
-                    </Pressable>
-                  ))}
+              {showContributorDropdown ? (
+                <View style={styles.dropdownBox}>
+                  <TextInput
+                    value={contributorSearch}
+                    onChangeText={setContributorSearch}
+                    style={styles.searchInput}
+                    placeholder="Search contributors"
+                  />
+                  <ScrollView style={styles.dropdownScroll} nestedScrollEnabled>
+                    {filteredContributors.length === 0 ? (
+                      <Text style={styles.noMatchText}>No matches found</Text>
+                    ) : (
+                      filteredContributors.map((title) => (
+                        <Pressable
+                          key={title}
+                          style={styles.dropdownItem}
+                          onPress={() => toggleContributor(title)}
+                        >
+                          <View
+                            style={[
+                              styles.dropdownCheckbox,
+                              payoutContributors.includes(title) &&
+                                styles.dropdownCheckboxChecked,
+                            ]}
+                          >
+                            {payoutContributors.includes(title) ? (
+                              <Text style={styles.checkmark}>✓</Text>
+                            ) : null}
+                          </View>
+                          <Text style={styles.dropdownItemText}>{title}</Text>
+                        </Pressable>
+                      ))
+                    )}
+                  </ScrollView>
                 </View>
               ) : null}
-              <View style={styles.row}>
-                <View style={styles.flex}>
-                  <Text style={styles.inputLabel}>Custom Individual Contribution</Text>
-                  <TextInput
-                    value={customIndividualContribution}
-                    onChangeText={setCustomIndividualContribution}
-                    style={styles.input}
-                    keyboardType="numeric"
-                    placeholder="0"
-                  />
-                </View>
-                <View style={styles.flex}>
-                  <Text style={styles.inputLabel}>Custom Group Contribution</Text>
-                  <TextInput
-                    value={customGroupContribution}
-                    onChangeText={setCustomGroupContribution}
-                    style={styles.input}
-                    keyboardType="numeric"
-                    placeholder="0"
-                  />
-                </View>
-              </View>
-            </View>
 
-            <View style={styles.sectionCard}>
-              <Text style={styles.sectionTitle}>Payout Contributors</Text>
-              {jobTitlesError ? <Text style={styles.errorText}>{jobTitlesError}</Text> : null}
-              <View style={styles.chipGrid}>
-                {groupedJobTitles.map((title) => (
-                  <Pressable
-                    key={`contrib-${title}`}
-                    style={[
-                      styles.chip,
-                      payoutContributors.includes(title) && styles.chipSelected,
-                    ]}
-                    onPress={() => updateSelection(title, payoutContributors, setPayoutContributors)}
-                  >
-                    <Text style={styles.chipText}>{title}</Text>
-                  </Pressable>
-                ))}
-              </View>
-            </View>
+              {/* Payout Receivers */}
+              <Text style={[styles.inputLabel, { marginTop: 16 }]}>Select Payout Receivers</Text>
+              <Pressable
+                style={styles.select}
+                onPress={() => setShowReceiverDropdown((prev) => !prev)}
+              >
+                <View style={styles.selectedChipsContainer}>
+                  {payoutReceivers.length > 0 ? (
+                    payoutReceivers.map((r) => (
+                      <View key={r} style={styles.selectedChip}>
+                        <Text style={styles.selectedChipText}>{r}</Text>
+                        <Pressable
+                          onPress={(e) => {
+                            e.stopPropagation();
+                            toggleReceiver(r);
+                          }}
+                        >
+                          <Text style={styles.selectedChipRemove}>×</Text>
+                        </Pressable>
+                      </View>
+                    ))
+                  ) : (
+                    <Text style={styles.selectPlaceholder}>Select Receivers</Text>
+                  )}
+                </View>
+                <Text style={styles.selectCaret}>▾</Text>
+              </Pressable>
+              {showReceiverDropdown ? (
+                <View style={styles.dropdownBox}>
+                  <TextInput
+                    value={receiverSearch}
+                    onChangeText={setReceiverSearch}
+                    style={styles.searchInput}
+                    placeholder="Search receivers"
+                  />
+                  <ScrollView style={styles.dropdownScroll} nestedScrollEnabled>
+                    {filteredReceivers.length === 0 ? (
+                      <Text style={styles.noMatchText}>No matches found</Text>
+                    ) : (
+                      filteredReceivers.map((title) => (
+                        <Pressable
+                          key={title}
+                          style={styles.dropdownItem}
+                          onPress={() => toggleReceiver(title)}
+                        >
+                          <View
+                            style={[
+                              styles.dropdownCheckbox,
+                              payoutReceivers.includes(title) && styles.dropdownCheckboxChecked,
+                            ]}
+                          >
+                            {payoutReceivers.includes(title) ? (
+                              <Text style={styles.checkmark}>✓</Text>
+                            ) : null}
+                          </View>
+                          <Text style={styles.dropdownItemText}>{title}</Text>
+                        </Pressable>
+                      ))
+                    )}
+                  </ScrollView>
+                </View>
+              ) : null}
 
-            <View style={styles.sectionCard}>
-              <Text style={styles.sectionTitle}>Payout Receivers</Text>
-              <View style={styles.chipGrid}>
-                {groupedJobTitles.map((title) => (
+              {/* Payout Rule */}
+              <Text style={[styles.inputLabel, { marginTop: 16 }]}>Payout Rule</Text>
+              <View style={styles.radioGroup}>
+                {payoutRuleOptions.map((rule) => (
                   <Pressable
-                    key={`receiver-${title}`}
-                    style={[
-                      styles.chip,
-                      payoutReceivers.includes(title) && styles.chipSelected,
-                    ]}
-                    onPress={() => updateSelection(title, payoutReceivers, setPayoutReceivers)}
+                    key={rule}
+                    style={styles.radioItem}
+                    onPress={() => setPayoutRule(rule)}
                   >
-                    <Text style={styles.chipText}>{title}</Text>
-                  </Pressable>
-                ))}
-              </View>
-              {payoutReceivers.length ? (
-                <View style={styles.receiverList}>
-                  {payoutReceivers.map((name) => (
-                    <View key={`percent-${name}`} style={styles.receiverRow}>
-                      <Text style={styles.receiverLabel}>{name}</Text>
-                      <TextInput
-                        value={receiverPercentages[name] ?? ""}
-                        onChangeText={(value) => handleReceiverPercentageChange(name, value)}
-                        style={styles.receiverInput}
-                        keyboardType="numeric"
-                        placeholder="%"
-                      />
+                    <View style={styles.radioOuter}>
+                      {payoutRule === rule ? <View style={styles.radioInner} /> : null}
                     </View>
-                  ))}
+                    <Text style={styles.radioLabel}>{rule}</Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              {/* Custom Payout Fields */}
+              {payoutRule === "Custom Payout" ? (
+                <View style={styles.row}>
+                  <View style={styles.flex}>
+                    <Text style={styles.inputLabel}>Individual Payout</Text>
+                    <View style={styles.percentInputRow}>
+                      <TextInput
+                        value={customIndividualContribution}
+                        onChangeText={setCustomIndividualContribution}
+                        style={styles.percentInput}
+                        keyboardType="numeric"
+                        placeholder="0"
+                      />
+                      <Text style={styles.percentSymbol}>%</Text>
+                    </View>
+                  </View>
+                  <View style={styles.flex}>
+                    <Text style={styles.inputLabel}>Group Contribution</Text>
+                    <View style={styles.percentInputRow}>
+                      <TextInput
+                        value={customGroupContribution}
+                        onChangeText={setCustomGroupContribution}
+                        style={styles.percentInput}
+                        keyboardType="numeric"
+                        placeholder="0"
+                      />
+                      <Text style={styles.percentSymbol}>%</Text>
+                    </View>
+                  </View>
+                </View>
+              ) : null}
+
+              {/* Payout Rule Info */}
+              {payoutRule === "Equal Payout" ? (
+                <Text style={styles.ruleInfoText}>
+                  All employees will receive an equal payout
+                </Text>
+              ) : payoutRule === "Hour Based Payout" ? (
+                <Text style={styles.ruleInfoText}>
+                  All employees will receive a payout based on hours worked
+                </Text>
+              ) : null}
+
+              {/* Payout Percentages */}
+              {(payoutRule === "Custom Payout" || payoutRule === "Job Weighted Payout") &&
+              payoutPercentTargets.length > 0 ? (
+                <View style={styles.percentagesSection}>
+                  <Text style={styles.inputLabel}>Payout Percentages</Text>
+                  {payoutPercentTargets.map((name) => {
+                    const isContributor = payoutContributors.includes(name);
+                    const isReceiver = payoutReceivers.includes(name);
+                    return (
+                      <View key={name} style={styles.percentageRow}>
+                        <View style={styles.percentageNameContainer}>
+                          <Text style={styles.percentageName}>{name}</Text>
+                          <View style={styles.badgeContainer}>
+                            {isContributor ? (
+                              <View style={styles.roleBadge}>
+                                <Text style={styles.roleBadgeText}>Contributor</Text>
+                              </View>
+                            ) : null}
+                            {isReceiver ? (
+                              <View style={styles.roleBadge}>
+                                <Text style={styles.roleBadgeText}>Receiver</Text>
+                              </View>
+                            ) : null}
+                          </View>
+                        </View>
+                        <View style={styles.percentInputRow}>
+                          <TextInput
+                            value={receiverPercentages[name] ?? ""}
+                            onChangeText={(value) => handleReceiverPercentageChange(name, value)}
+                            style={styles.percentInput}
+                            keyboardType="numeric"
+                            placeholder="0"
+                          />
+                          <Text style={styles.percentSymbol}>%</Text>
+                        </View>
+                      </View>
+                    );
+                  })}
+
+                  {/* Totals */}
+                  <View style={styles.totalsSection}>
+                    {payoutContributors.length > 0 ? (
+                      <View style={styles.totalRow}>
+                        <Text style={styles.totalLabel}>Contributors:</Text>
+                        <Text style={styles.totalValue}>{contributorPercentage.toFixed(2)}%</Text>
+                      </View>
+                    ) : null}
+                    {payoutReceivers.length > 0 ? (
+                      <View style={styles.totalRow}>
+                        <Text style={styles.totalLabel}>Receivers:</Text>
+                        <Text style={styles.totalValue}>
+                          {receiverPercentageTotal.toFixed(2)}%
+                        </Text>
+                      </View>
+                    ) : null}
+                    <View style={styles.totalRow}>
+                      <Text style={styles.totalLabelBold}>Total:</Text>
+                      <Text style={styles.totalValueBold}>{totalPercentage.toFixed(2)}%</Text>
+                    </View>
+                    {Math.abs(totalPercentage - 100) > 0.01 ? (
+                      <Text style={styles.validationError}>
+                        Total must equal 100%. (Contributors + Receivers = 100%)
+                      </Text>
+                    ) : null}
+                  </View>
                 </View>
               ) : null}
             </View>
 
+            {/* Pre-Payout Section */}
             <View style={styles.sectionCard}>
               <View style={styles.prePayoutHeader}>
-                <Text style={styles.sectionTitle}>Pre-Payouts</Text>
-                <Pressable style={styles.secondaryButtonSmall} onPress={addPrePayout}>
-                  <Text style={styles.secondaryButtonText}>Add</Text>
+                <View style={styles.prePayoutTextContainer}>
+                  <Text style={styles.sectionTitle}>Pre-Payout</Text>
+                  <Text style={styles.sectionSubtitle}>
+                    Any amount that must be allocated to an account before Payout?
+                  </Text>
+                </View>
+                <Pressable style={styles.addButton} onPress={addPrePayout}>
+                  <Text style={styles.deleteButtonText}>Add</Text>
                 </Pressable>
               </View>
               {prePayouts.length === 0 ? (
@@ -841,33 +1342,47 @@ const ShiftPayoutScreen = () => {
               ) : (
                 prePayouts.map((entry, index) => (
                   <View key={`prepayout-${index}`} style={styles.prePayoutCard}>
-                    <View style={styles.row}>
-                      <View style={styles.flex}>
-                        <Text style={styles.inputLabel}>Type</Text>
-                        <Pressable
-                          style={styles.select}
-                          onPress={() =>
-                            updatePrePayout(index, {
-                              type:
-                                entry.type === "Fixed Amount" ? "Percentage" : "Fixed Amount",
-                            })
-                          }
-                        >
-                          <Text style={styles.selectText}>{entry.type}</Text>
-                          <Text style={styles.selectCaret}>↺</Text>
-                        </Pressable>
+                    <View style={styles.prePayoutTypeRow}>
+                      <View style={styles.radioGroup}>
+                        {(["Percentage", "Fixed Amount"] as const).map((type) => (
+                          <Pressable
+                            key={type}
+                            style={styles.radioItem}
+                            onPress={() => updatePrePayout(index, { type, value: "" })}
+                          >
+                            <View style={styles.radioOuter}>
+                              {entry.type === type ? <View style={styles.radioInner} /> : null}
+                            </View>
+                            <Text style={styles.radioLabel}>{type}</Text>
+                          </Pressable>
+                        ))}
                       </View>
-                      <View style={styles.flex}>
-                        <Text style={styles.inputLabel}>Value</Text>
-                        <TextInput
-                          value={entry.value}
-                          onChangeText={(value) => updatePrePayout(index, { value })}
-                          style={styles.input}
-                          keyboardType="numeric"
-                          placeholder="0"
-                        />
-                      </View>
+                      <Pressable
+                        style={styles.deleteButton}
+                        onPress={() => removePrePayout(index)}
+                      >
+                        <Text style={styles.deleteButtonText}>Delete</Text>
+                      </Pressable>
                     </View>
+
+                    {entry.type ? (
+                      <View style={styles.prePayoutValueRow}>
+                        <Text style={styles.prePayoutValueLabel}>Set your {entry.type}</Text>
+                        <View style={styles.percentInputRow}>
+                          <TextInput
+                            value={entry.value}
+                            onChangeText={(value) => updatePrePayout(index, { value })}
+                            style={styles.percentInput}
+                            keyboardType="numeric"
+                            placeholder="0"
+                          />
+                          <Text style={styles.percentSymbol}>
+                            {entry.type === "Percentage" ? "%" : "$"}
+                          </Text>
+                        </View>
+                      </View>
+                    ) : null}
+
                     <Text style={styles.inputLabel}>Account</Text>
                     <TextInput
                       value={entry.account}
@@ -875,17 +1390,12 @@ const ShiftPayoutScreen = () => {
                       style={styles.input}
                       placeholder="Account name"
                     />
-                    <Pressable
-                      style={styles.removeButton}
-                      onPress={() => removePrePayout(index)}
-                    >
-                      <Text style={styles.removeButtonText}>Remove</Text>
-                    </Pressable>
                   </View>
                 ))
               )}
             </View>
 
+            {/* Form Actions */}
             <View style={styles.formActions}>
               <Pressable
                 style={styles.secondaryButton}
@@ -902,7 +1412,13 @@ const ShiftPayoutScreen = () => {
                 disabled={isSubmitting}
               >
                 <Text style={styles.primaryButtonText}>
-                  {isSubmitting ? "Saving..." : "Save Schedule"}
+                  {isSubmitting
+                    ? editingScheduleId
+                      ? "Updating..."
+                      : "Saving..."
+                    : editingScheduleId
+                      ? "Update Schedule"
+                      : "Save Schedule"}
                 </Text>
               </Pressable>
             </View>
@@ -933,27 +1449,49 @@ const styles = StyleSheet.create({
     marginTop: 8,
     color: "#6b7280",
   },
+  headerSection: {
+    marginBottom: 16,
+  },
+  pageTitle: {
+    fontSize: 24,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  pageSubtitle: {
+    fontSize: 14,
+    color: "#6b7280",
+    marginTop: 4,
+  },
+  controlsRow: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    marginBottom: 16,
+    gap: 12,
+  },
+  toggleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  toggleLabel: {
+    fontSize: 14,
+    color: "#374151",
+    fontWeight: "500",
+  },
   actionRow: {
     flexDirection: "row",
     gap: 12,
-    marginTop: 12,
-    marginBottom: 16,
-    justifyContent: "flex-end",
   },
   title: {
     fontSize: 22,
     fontWeight: "700",
     color: "#111827",
   },
-  pageTitle: {
-    fontSize: 24,
-    fontWeight: "400",
-    color: "#111827",
-  },
   primaryButton: {
     backgroundColor: "#cab99a",
-    paddingVertical: 10,
-    paddingHorizontal: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
     borderRadius: 10,
     alignItems: "center",
   },
@@ -970,17 +1508,19 @@ const styles = StyleSheet.create({
   },
   secondaryButton: {
     borderWidth: 1,
-    borderColor: "#111827",
-    paddingVertical: 10,
-    paddingHorizontal: 16,
+    borderColor: "#d1d5db",
+    backgroundColor: "#ffffff",
+    paddingVertical: 12,
+    paddingHorizontal: 20,
     borderRadius: 10,
     alignItems: "center",
   },
   secondaryButtonSmall: {
     borderWidth: 1,
-    borderColor: "#111827",
-    paddingVertical: 6,
-    paddingHorizontal: 10,
+    borderColor: "#d1d5db",
+    backgroundColor: "#ffffff",
+    paddingVertical: 8,
+    paddingHorizontal: 12,
     borderRadius: 10,
     alignItems: "center",
   },
@@ -1009,9 +1549,11 @@ const styles = StyleSheet.create({
     borderColor: "#e5e7eb",
     padding: 16,
     alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 8,
   },
   loadingText: {
-    marginTop: 8,
     color: "#6b7280",
   },
   emptyBox: {
@@ -1030,6 +1572,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1,
     borderColor: "#e5e7eb",
+    overflow: "hidden",
   },
   scheduleCardSelected: {
     borderColor: "#111827",
@@ -1042,8 +1585,8 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   checkbox: {
-    width: 18,
-    height: 18,
+    width: 20,
+    height: 20,
     borderRadius: 4,
     borderWidth: 1,
     borderColor: "#9ca3af",
@@ -1052,8 +1595,8 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   checkboxChecked: {
-    width: 10,
-    height: 10,
+    width: 12,
+    height: 12,
     borderRadius: 2,
     backgroundColor: "#111827",
   },
@@ -1064,6 +1607,18 @@ const styles = StyleSheet.create({
   scheduleCell: {
     gap: 4,
   },
+  scheduleRowInline: {
+    flexDirection: "row",
+    gap: 16,
+  },
+  scheduleCellInline: {
+    flex: 1,
+    gap: 6,
+  },
+  scheduleCellRight: {
+    alignItems: "flex-end",
+    gap: 6,
+  },
   cellLabel: {
     fontSize: 11,
     textTransform: "uppercase",
@@ -1071,26 +1626,100 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   cellValue: {
-    fontSize: 13,
+    fontSize: 14,
     color: "#111827",
+    fontWeight: "500",
+  },
+  statusBadge: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 16,
+  },
+  statusBadgeActive: {
+    backgroundColor: "#dcfce7",
+  },
+  statusBadgeInactive: {
+    backgroundColor: "#fee2e2",
+  },
+  statusBadgeText: {
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  statusBadgeTextActive: {
+    color: "#15803d",
+  },
+  statusBadgeTextInactive: {
+    color: "#dc2626",
   },
   expandIcon: {
-    fontSize: 18,
+    fontSize: 20,
     color: "#9ca3af",
     paddingHorizontal: 4,
+    fontWeight: "600",
   },
-  scheduleFooter: {
+  expandedSection: {
     borderTopWidth: 1,
     borderTopColor: "#e5e7eb",
     padding: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
+    gap: 16,
   },
-  scheduleHint: {
+  detailSection: {
+    borderBottomWidth: 1,
+    borderBottomColor: "#f3f4f6",
+    paddingBottom: 12,
+  },
+  detailHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  detailSectionTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#374151",
+  },
+  detailPercentBadge: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  detailRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 4,
+  },
+  detailLabel: {
+    fontSize: 14,
     color: "#6b7280",
-    flex: 1,
+  },
+  detailValue: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#111827",
+  },
+  detailChip: {
+    backgroundColor: "#f3f4f6",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  detailChipText: {
+    fontSize: 13,
+    color: "#374151",
+    fontWeight: "500",
+  },
+  chipGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  expandedActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    paddingTop: 8,
   },
   formContainer: {
     gap: 16,
@@ -1104,21 +1733,29 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   sectionTitle: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: "700",
     color: "#111827",
   },
-  inputLabel: {
-    fontSize: 12,
+  sectionSubtitle: {
+    fontSize: 13,
     color: "#6b7280",
+    marginTop: 2,
+  },
+  inputLabel: {
+    fontSize: 13,
+    color: "#6b7280",
+    fontWeight: "500",
+    marginBottom: 4,
   },
   input: {
     borderWidth: 1,
     borderColor: "#e5e7eb",
     borderRadius: 10,
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 12,
     backgroundColor: "#ffffff",
+    fontSize: 15,
   },
   row: {
     flexDirection: "row",
@@ -1126,24 +1763,31 @@ const styles = StyleSheet.create({
   },
   flex: {
     flex: 1,
-    gap: 8,
+    gap: 4,
   },
   select: {
     borderWidth: 1,
     borderColor: "#e5e7eb",
     borderRadius: 10,
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 12,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     backgroundColor: "#ffffff",
+    minHeight: 48,
   },
   selectText: {
     color: "#111827",
+    fontSize: 15,
+  },
+  selectPlaceholder: {
+    color: "#9ca3af",
+    fontSize: 15,
   },
   selectCaret: {
     color: "#6b7280",
+    fontSize: 14,
   },
   optionsBox: {
     marginTop: 6,
@@ -1152,89 +1796,357 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     backgroundColor: "#ffffff",
     maxHeight: 220,
+    overflow: "hidden",
   },
   optionsScroll: {
     maxHeight: 200,
   },
   optionRow: {
-    paddingVertical: 10,
+    paddingVertical: 12,
     paddingHorizontal: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f3f4f6",
   },
   optionText: {
     color: "#111827",
+    fontSize: 15,
   },
-  chipGrid: {
+  selectedChipsContainer: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 8,
-  },
-  chip: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "#e5e7eb",
-    backgroundColor: "#ffffff",
-  },
-  chipSelected: {
-    backgroundColor: "#cab99a",
-    borderColor: "#cab99a",
-  },
-  chipText: {
-    color: "#111827",
-    fontSize: 12,
-  },
-  receiverList: {
-    marginTop: 8,
-    gap: 8,
-  },
-  receiverRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
-  },
-  receiverLabel: {
-    color: "#111827",
+    gap: 6,
     flex: 1,
   },
-  receiverInput: {
-    width: 80,
+  selectedChip: {
+    backgroundColor: "#f3f4f6",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  selectedChipText: {
+    fontSize: 13,
+    color: "#374151",
+  },
+  selectedChipRemove: {
+    fontSize: 16,
+    color: "#6b7280",
+    fontWeight: "600",
+  },
+  dropdownBox: {
+    marginTop: 6,
     borderWidth: 1,
     borderColor: "#e5e7eb",
     borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    textAlign: "center",
+    backgroundColor: "#ffffff",
+    maxHeight: 280,
+    overflow: "hidden",
   },
-  prePayoutHeader: {
+  searchInput: {
+    borderBottomWidth: 1,
+    borderBottomColor: "#e5e7eb",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+  },
+  dropdownScroll: {
+    maxHeight: 220,
+  },
+  dropdownItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    gap: 10,
+  },
+  dropdownCheckbox: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: "#d1d5db",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  dropdownCheckboxChecked: {
+    backgroundColor: "#cab99a",
+    borderColor: "#cab99a",
+  },
+  checkmark: {
+    color: "#111827",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  dropdownItemText: {
+    fontSize: 14,
+    color: "#111827",
+  },
+  noMatchText: {
+    padding: 12,
+    color: "#6b7280",
+    fontSize: 14,
+  },
+  fundRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: "#ffffff",
+  },
+  fundName: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#111827",
+  },
+  fundInputContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  fundInput: {
+    width: 70,
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    textAlign: "right",
+    fontSize: 14,
+  },
+  fundPercent: {
+    fontSize: 14,
+    color: "#6b7280",
+  },
+  radioGroup: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 16,
+  },
+  radioItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  radioOuter: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: "#d1d5db",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  radioInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "#111827",
+  },
+  radioLabel: {
+    fontSize: 14,
+    color: "#111827",
+  },
+  ruleInfoText: {
+    color: "#dc2626",
+    fontWeight: "600",
+    fontSize: 14,
+    marginTop: 8,
+  },
+  percentagesSection: {
+    marginTop: 16,
+    gap: 12,
+  },
+  percentageRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: "#ffffff",
+  },
+  percentageNameContainer: {
+    flex: 1,
+    gap: 4,
+  },
+  percentageName: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#111827",
+  },
+  badgeContainer: {
+    flexDirection: "row",
+    gap: 6,
+  },
+  roleBadge: {
+    backgroundColor: "#e6d7b8",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  roleBadgeText: {
+    fontSize: 11,
+    color: "#374151",
+    fontWeight: "500",
+  },
+  percentInputRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  percentInput: {
+    width: 70,
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    textAlign: "right",
+    fontSize: 14,
+  },
+  percentSymbol: {
+    fontSize: 14,
+    color: "#6b7280",
+  },
+  totalsSection: {
+    borderTopWidth: 1,
+    borderTopColor: "#e5e7eb",
+    paddingTop: 12,
+    marginTop: 8,
+    gap: 6,
+  },
+  totalRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  totalLabel: {
+    fontSize: 14,
+    color: "#6b7280",
+  },
+  totalValue: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#111827",
+  },
+  totalLabelBold: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  totalValueBold: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  validationError: {
+    color: "#dc2626",
+    fontSize: 13,
+    marginTop: 4,
+  },
+  prePayoutHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  prePayoutTextContainer: {
+    flex: 1,
+    maxWidth: "60%",
+  },
+  addButton: {
+    backgroundColor: "#cab99a",
+    paddingLeft: 20,
+    paddingRight: 20,
+    paddingVertical: 8,
+    borderRadius: 8,
   },
   helperText: {
     color: "#6b7280",
+    fontSize: 14,
   },
   prePayoutCard: {
     borderWidth: 1,
     borderColor: "#e5e7eb",
     borderRadius: 12,
     padding: 12,
-    gap: 10,
+    gap: 12,
+    backgroundColor: "#fafafa",
   },
-  removeButton: {
-    alignSelf: "flex-end",
-    paddingVertical: 4,
+  prePayoutTypeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
-  removeButtonText: {
-    color: "#dc2626",
+  deleteButton: {
+    backgroundColor: "#cab99a",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  deleteButtonText: {
+    color: "#111827",
     fontWeight: "600",
+    fontSize: 13,
+  },
+  prePayoutValueRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: "#ffffff",
+  },
+  prePayoutValueLabel: {
+    fontSize: 14,
+    fontWeight: "500",
+    color: "#111827",
   },
   formActions: {
     flexDirection: "row",
     justifyContent: "flex-end",
     gap: 12,
     marginTop: 8,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    padding: 24,
+    width: "100%",
+    maxWidth: 400,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  modalText: {
+    fontSize: 14,
+    color: "#6b7280",
+    marginTop: 8,
+  },
+  modalActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 12,
+    marginTop: 24,
   },
 });
 

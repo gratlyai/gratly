@@ -3,6 +3,7 @@ import {
   ActionSheetIOS,
   Alert,
   Image,
+  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
@@ -210,7 +211,12 @@ const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         <View style={styles.headerSpacer} />
       </View>
 
-        <View style={styles.content}>{children}</View>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          style={styles.content}
+        >
+          {children}
+        </KeyboardAvoidingView>
 
       <Modal
         transparent

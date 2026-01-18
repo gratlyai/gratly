@@ -8,6 +8,7 @@ export type PayoutScheduleRow = {
   start_time: string | null;
   end_time: string | null;
   payout_rule_id: string | null;
+  is_active: boolean;
 };
 
 export type PayoutScheduleDetail = PayoutScheduleRow & {
@@ -69,11 +70,15 @@ export async function fetchJobTitles(
 export async function fetchPayoutSchedules(
   userId: number,
   restaurantId: number,
+  includeInactive?: boolean,
 ): Promise<PayoutScheduleRow[]> {
   const params = new URLSearchParams({
     user_id: String(userId),
     restaurant_id: String(restaurantId),
   });
+  if (includeInactive) {
+    params.set("include_inactive", "true");
+  }
   return api.get<PayoutScheduleRow[]>(`/payout-schedules?${params.toString()}`);
 }
 
@@ -112,4 +117,14 @@ export async function deletePayoutSchedule(
     restaurant_id: String(restaurantId),
   });
   await api.delete(`/payout-schedules/${scheduleId}?${params.toString()}`);
+}
+
+export async function activatePayoutSchedule(
+  scheduleId: number,
+  userId: number,
+): Promise<{ success: boolean }> {
+  const params = new URLSearchParams({
+    user_id: String(userId),
+  });
+  return api.post(`/payout-schedules/${scheduleId}/activate?${params.toString()}`, {});
 }
